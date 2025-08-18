@@ -9,6 +9,12 @@ egui = { version = "0.27", features = ["default_fonts"] }
 embassy-executor = { version = "0.7.0", features = ["arch-std"]}
 embassy-futures = { version = "0.1.1"}
 embassy-time = { version = "0.4.0",features = ["std"]}
-moonblokz-radio-lib = { path = "../moonblokz-radio-lib",default-features = false, features = ["radio-device-echo"]}
+moonblokz-radio-lib = { path = "../moonblokz-radio-lib",default-features = false, features = ["radio-device-simulator"]}
 log = "0.4"
 env_logger = "0.11"
+rand = "0.8"
+futures = { version = "0.3", default-features = false, features = ["std"] }
+embassy-sync = { version = "=0.6.0", features = ["std"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
