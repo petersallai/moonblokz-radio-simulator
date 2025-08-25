@@ -9,6 +9,7 @@ use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::network::NodeMessage;
 use crate::network::Point;
 
 mod network;
@@ -27,11 +28,18 @@ const NODE_RADIO_TRANSFER_INDICATOR_TIMEOUT: u64 = 1000;
 const NODE_RADIO_TRANSFER_INDICATOR_DURATION: Duration = Duration::from_millis(NODE_RADIO_TRANSFER_INDICATOR_TIMEOUT);
 
 #[derive(Debug)]
+pub struct NodeInfo {
+    pub node_id: u32,
+    pub messages: Vec<NodeMessage>,
+}
+
+#[derive(Debug)]
 enum UIRefreshState {
     Alert(String),
     NodeUpdated(NodeUIState),
     NodesUpdated(Vec<NodeUIState>),
-    NodeSentRadioMessage(u32, u32), // Node ID of the node that sent a message
+    NodeSentRadioMessage(u32, u8, u32), // node ID, message type, and effective distance
+    NodeInfo(NodeInfo),
 }
 #[derive(Debug)]
 struct NodeUIState {
@@ -42,6 +50,7 @@ struct NodeUIState {
 
 enum UICommand {
     LoadFile(String),
+    RequestNodeInfo(u32),
 }
 
 struct AppState {
@@ -51,7 +60,10 @@ struct AppState {
     // Map state
     selected: Option<usize>,
     nodes: Vec<NodeUIState>,
-    node_radio_transfer_indicators: HashMap<u32, (Instant, u32)>,
+    node_radio_transfer_indicators: HashMap<u32, (Instant, u8, u32)>,
+    node_info: Option<NodeInfo>,
+    start_time: Instant,
+    last_node_info_update: Instant,
 }
 
 impl AppState {
@@ -63,7 +75,25 @@ impl AppState {
             selected: None,
             nodes: Vec::new(),
             node_radio_transfer_indicators: HashMap::new(),
+            node_info: None,
+            start_time: Instant::now(),
+            last_node_info_update: Instant::now(),
         }
+    }
+}
+
+fn color_for_message_type(message_type: u8, alpha: f32) -> Color32 {
+    match message_type {
+        1 => Color32::from_rgba_unmultiplied(0, 255, 0, (alpha * 255.0) as u8),   // Type 1: Green
+        2 => Color32::from_rgba_unmultiplied(255, 255, 0, (alpha * 255.0) as u8), // Type 2: Yellow
+        3 => Color32::from_rgba_unmultiplied(200, 100, 50, (alpha * 255.0) as u8), // Type 3: Red
+        4 => Color32::from_rgba_unmultiplied(0, 0, 255, (alpha * 255.0) as u8),   // Type 4: Blue
+        5 => Color32::from_rgba_unmultiplied(255, 0, 255, (alpha * 255.0) as u8), // Type 5: Magenta
+        6 => Color32::from_rgba_unmultiplied(255, 165, 0, (alpha * 255.0) as u8), // Type 6: Orange
+        7 => Color32::from_rgba_unmultiplied(0, 255, 255, (alpha * 255.0) as u8), // Type 7: Cyan
+        8 => Color32::from_rgba_unmultiplied(128, 0, 128, (alpha * 255.0) as u8), // Type 8: Purple
+        9 => Color32::from_rgba_unmultiplied(255, 192, 203, (alpha * 255.0) as u8), // Type 9: Pink
+        _ => Color32::from_rgba_unmultiplied(255, 255, 255, (alpha * 255.0) as u8), // Unknown type: White
     }
 }
 
@@ -71,6 +101,13 @@ impl eframe::App for AppState {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Repaint periodically so background updates are visible without input
         ctx.request_repaint_after(Duration::from_millis(50));
+
+        if self.last_node_info_update.elapsed() > Duration::from_secs(1) {
+            if let Some(node_info) = &self.node_info {
+                self.last_node_info_update = Instant::now();
+                _ = self.ui_command_tx.try_send(UICommand::RequestNodeInfo(node_info.node_id));
+            }
+        }
 
         while let Ok(msg) = self.ui_refresh_rx.try_receive() {
             match msg {
@@ -87,9 +124,12 @@ impl eframe::App for AppState {
                 UIRefreshState::NodesUpdated(nodes) => {
                     self.nodes = nodes;
                 }
-                UIRefreshState::NodeSentRadioMessage(node_id, distance) => {
+                UIRefreshState::NodeSentRadioMessage(node_id, message_type, distance) => {
                     self.node_radio_transfer_indicators
-                        .insert(node_id, (Instant::now() + NODE_RADIO_TRANSFER_INDICATOR_DURATION, distance));
+                        .insert(node_id, (Instant::now() + NODE_RADIO_TRANSFER_INDICATOR_DURATION, message_type, distance));
+                }
+                UIRefreshState::NodeInfo(node_info) => {
+                    self.node_info = Some(node_info);
                 }
             }
         }
@@ -123,6 +163,11 @@ impl eframe::App for AppState {
                 cols[0].vertical(|ui| {
                     ui.heading("System Metrics");
                     ui.separator();
+                    ui.horizontal(|ui| {
+                        ui.label("Simulation time:");
+                        ui.label(egui::RichText::new(Instant::now().duration_since(self.start_time).as_secs().to_string()).strong());
+                    });
+
                     ui.horizontal(|ui| {
                         ui.label("Nodes:");
                         ui.label(egui::RichText::new(self.nodes.len().to_string()).strong());
@@ -176,8 +221,8 @@ impl eframe::App for AppState {
             });
         });
 
-        // Bottom-right: inspector (fixed 200 px) with top-left info and bottom-aligned centered buttons
-        egui::SidePanel::right("inspector_right").exact_width(200.0).show(ctx, |ui| {
+        // Bottom-right: inspector (fixed 400 px) with top-left info and bottom-aligned centered buttons
+        egui::SidePanel::right("inspector_right").exact_width(400.0).show(ctx, |ui| {
             // Top content (default top-down, left-aligned)
             ui.heading("Inspector");
             ui.separator();
@@ -196,7 +241,7 @@ impl eframe::App for AppState {
                 });
                 ui.horizontal(|ui| {
                     ui.label("Radio strength:");
-                    ui.label(egui::RichText::new(format!("{}", 3400)).strong());
+                    ui.label(egui::RichText::new(format!("{}", p.radio_strength)).strong());
                 });
                 ui.separator();
                 ui.horizontal(|ui| {
@@ -207,65 +252,151 @@ impl eframe::App for AppState {
                     ui.label("Received messages:");
                     ui.label(egui::RichText::new(format!("{}", 30)).strong());
                 });
-            } else {
-                ui.label("No point selected.");
-            }
 
-            // Push buttons to the bottom using a spacer, then center them at 80% width
-            let avail_h = ui.available_height();
-            let avail_w = ui.available_width();
-            let button_h = ui.spacing().interact_size.y;
-            let spacing_y = ui.spacing().item_spacing.y;
-            // Three button rows: height = 3 * button_h + 2 * spacing between rows
-            let total_buttons_h = if self.selected.is_some() { button_h * 3.0 + spacing_y * 2.0 } else { 0.0 };
-            let bottom_padding = 20.0; // extra space under the bottom button
-            let spacer_h = (avail_h - total_buttons_h - if self.selected.is_some() { bottom_padding } else { 0.0 }).max(0.0);
-            ui.add_space(spacer_h);
-            if let Some(i) = self.selected {
-                let button_w = (avail_w * 0.8).max(0.0);
-                // Top-most of the three (added last): Start Measurement
-                ui.horizontal(|ui| {
-                    let pad = (avail_w - button_w).max(0.0) / 2.0;
-                    ui.add_space(pad);
-                    if ui.add_sized([button_w, button_h], egui::Button::new("Send Echo Request")).clicked() {
-                        debug!("Start measurement for {i}");
+                // Messages header (outside of bottom-up so it doesn't steal table space)
+                if let Some(node_info) = &self.node_info {
+                    ui.separator();
+                    ui.heading(format!("Message stream for #{}", node_info.node_id));
+                    ui.add_space(4.0);
+                }
+
+                // Remaining area: bottom-up so buttons stick to the bottom and table fills above
+                let avail_w = ui.available_width();
+                let button_h = ui.spacing().interact_size.y;
+                ui.allocate_ui_with_layout(egui::vec2(avail_w, ui.available_height()), egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
+                    // Bottom buttons, centered at 80% width
+                    if let Some(i) = self.selected {
+                        let button_w = (avail_w * 0.8).max(0.0);
+
+                        // 20px padding at the very bottom under the last (bottom-most) button
+                        ui.add_space(20.0);
+
+                        ui.horizontal(|ui| {
+                            let pad = (avail_w - button_w).max(0.0) / 2.0;
+                            ui.add_space(pad);
+                            if ui.add_sized([button_w, button_h], egui::Button::new("Send Echo Request")).clicked() {
+                                debug!("Start measurement for {i}");
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            let pad = (avail_w - button_w).max(0.0) / 2.0;
+                            ui.add_space(pad);
+                            if ui.add_sized([button_w, button_h], egui::Button::new("Start Measurement")).clicked() {
+                                debug!("Delete {i}");
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            let pad = (avail_w - button_w).max(0.0) / 2.0;
+                            ui.add_space(pad);
+                            if ui.add_sized([button_w, button_h], egui::Button::new("Send Message...")).clicked() {
+                                debug!("Center on {i}");
+                            }
+                        });
+
+                        // 5px spacing above the first (top-most) button, separating it from the table
+                        ui.add_space(5.0);
+                    }
+
+                    // Table area above buttons: fill whatever is left
+                    let table_h = ui.available_height().max(0.0);
+                    if table_h > 0.0 {
+                        ui.allocate_ui_with_layout(egui::vec2(avail_w, table_h), egui::Layout::top_down(egui::Align::LEFT), |ui| {
+                            if let Some(node_info) = &self.node_info {
+                                if node_info.node_id == p.node_id {
+                                    egui::ScrollArea::vertical().show(ui, |ui| {
+                                        egui::Grid::new("messages_grid")
+                                            .striped(true)
+                                            .num_columns(6)
+                                            .spacing([30.0, 4.0])
+                                            .show(ui, |ui| {
+                                                // Header row
+                                                ui.strong("Timestamp");
+                                                ui.strong("From");
+                                                ui.strong("Type");
+                                                ui.strong("Packet");
+                                                ui.strong("Size");
+                                                ui.end_row();
+
+                                                for msg in node_info.messages.iter().rev() {
+                                                    // Color rows red if from this node, else green
+                                                    let row_color = if node_info.node_id == msg.sender_node {
+                                                        Color32::RED
+                                                    } else {
+                                                        Color32::LIGHT_GREEN
+                                                    };
+                                                    let type_string = match msg.message_type {
+                                                        1 => "Request echo",
+                                                        2 => "Echo",
+                                                        3 => "Echo result",
+                                                        4 => "Request block",
+                                                        5 => "Request block part",
+                                                        6 => "Add block",
+                                                        7 => "Add transaction",
+                                                        8 => "Mempool request",
+                                                        9 => "Support",
+                                                        _ => "Unknown",
+                                                    };
+
+                                                    let from_string = if node_info.node_id == msg.sender_node {
+                                                        "-".to_string()
+                                                    } else {
+                                                        format!("#{}", msg.sender_node)
+                                                    };
+                                                    // Relative time in seconds since app start
+                                                    let secs = msg.timestamp.duration_since(self.start_time).as_secs();
+
+                                                    let message_type_color = color_for_message_type(msg.message_type, 1.0);
+                                                    ui.colored_label(row_color, format!("{} s", secs));
+                                                    ui.colored_label(row_color, format!("{}", from_string));
+                                                    ui.colored_label(message_type_color, format!("{}", type_string));
+                                                    ui.colored_label(row_color, format!("{}/{}", msg.packet_index + 1, msg.packet_count));
+                                                    ui.colored_label(row_color, format!("{} B", msg.packet_size));
+                                                    ui.end_row();
+                                                }
+                                            });
+                                    });
+                                }
+                            }
+                        });
                     }
                 });
-                // Bottom button row: centered manually with left padding
-                ui.horizontal(|ui| {
-                    let pad = (avail_w - button_w).max(0.0) / 2.0;
-                    ui.add_space(pad);
-                    if ui.add_sized([button_w, button_h], egui::Button::new("Start Measurement")).clicked() {
-                        debug!("Delete {i}");
-                    }
+            } else {
+                // Center the info label both horizontally and vertically within the remaining panel space
+                ui.centered_and_justified(|ui| {
+                    ui.label("No node selected. Click on a node on the map to select it.");
                 });
-                // Above bottom row: centered camera button
-                ui.horizontal(|ui| {
-                    let pad = (avail_w - button_w).max(0.0) / 2.0;
-                    ui.add_space(pad);
-                    if ui.add_sized([button_w, button_h], egui::Button::new("Send Message...")).clicked() {
-                        debug!("Center on {i}");
-                    }
-                });
-                // Bottom padding under buttons
-                ui.add_space(bottom_padding);
             }
         });
 
         // Map fills the remaining space
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading("Map");
-            ui.label("Click to select a point");
             ui.separator();
 
-            // Reserve drawing area to fill all remaining space
-            let available = ui.available_size();
-            let size = egui::vec2(available.x, available.y);
-            let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+            // Reserve a square drawing area using the smaller of available width/height, centered both horizontally and vertically
+            let avail_rect = ui.available_rect_before_wrap();
+            let side = avail_rect.width().min(avail_rect.height());
+            let x = avail_rect.center().x - side / 2.0;
+            let y = avail_rect.center().y - side / 2.0;
+            let rect = egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(side, side));
+            let response = ui.interact(rect, egui::Id::new("map_canvas"), egui::Sense::click());
             let painter = ui.painter_at(rect);
 
             // Draw background
             painter.rect_filled(rect, 4.0, ui.visuals().extreme_bg_color);
+
+            // Draw grid: dark blue lines every 1000 world units (0..=10000)
+            let grid_color = Color32::from_rgb(0, 0, 100);
+            let grid_stroke = egui::Stroke::new(1.0, grid_color);
+            for i in 0..=10 {
+                let t = i as f32 / 10.0; // 0.0 ..= 1.0 in 0.1 steps
+                // Vertical line at x = i * 1000
+                let x = egui::lerp(rect.left()..=rect.right(), t);
+                painter.line_segment([egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())], grid_stroke);
+                // Horizontal line at y = i * 1000
+                let y = egui::lerp(rect.top()..=rect.bottom(), t);
+                painter.line_segment([egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)], grid_stroke);
+            }
 
             // Draw points scaled into rect
             let radius = 4.0;
@@ -275,14 +406,20 @@ impl eframe::App for AppState {
                     egui::lerp(rect.top()..=rect.bottom(), p.position.y as f32 / 10000f32),
                 );
                 let color = if Some(i) == self.selected {
+                    let scale_x = rect.width() / 10000.0;
+                    let scale_y = rect.height() / 10000.0;
+                    let units_to_pixels = scale_x.min(scale_y);
+                    let radius = p.radio_strength as f32 * units_to_pixels;
+                    painter.circle_filled(pos, radius, Color32::from_rgba_unmultiplied(0, 128, 255, 50));
                     Color32::from_rgb(0, 128, 255)
                 } else {
                     ui.visuals().widgets.inactive.fg_stroke.color
                 };
+
                 painter.circle_filled(pos, radius, color);
 
                 // Draw radio transfer indicator
-                if let Some((expiry, distance)) = self.node_radio_transfer_indicators.get(&p.node_id) {
+                if let Some((expiry, message_type, distance)) = self.node_radio_transfer_indicators.get(&p.node_id) {
                     let remaining = *expiry - Instant::now();
                     if remaining > Duration::from_millis(0) {
                         let alpha = (remaining.as_millis() as f32 / NODE_RADIO_TRANSFER_INDICATOR_TIMEOUT as f32).clamp(0.0, 1.0);
@@ -291,7 +428,8 @@ impl eframe::App for AppState {
                         let scale_y = rect.height() / 10000.0;
                         let units_to_pixels = scale_x.min(scale_y);
                         let radius = (*distance as f32 * units_to_pixels) * (1.0 - alpha);
-                        painter.circle_stroke(pos, radius, egui::Stroke::new(1.0, Color32::from_white_alpha((alpha * 255.0) as u8)));
+                        let color = color_for_message_type(*message_type, alpha);
+                        painter.circle_stroke(pos, radius, egui::Stroke::new(1.0, color));
                     } else {
                         self.node_radio_transfer_indicators.remove(&p.node_id);
                     }
@@ -312,7 +450,17 @@ impl eframe::App for AppState {
                             best = Some((i, d2));
                         }
                     }
-                    self.selected = best.map(|(i, _)| i);
+                    let new_selected = best.map(|(i, _)| i);
+                    if new_selected != self.selected {
+                        self.selected = new_selected;
+                        if let Some(new_selected) = new_selected {
+                            let node_id = &self.nodes[new_selected].node_id;
+                            self.ui_command_tx.try_send(UICommand::RequestNodeInfo(node_id.clone())).ok();
+                            log::debug!("Selected node {}", node_id);
+                        }
+                    } else {
+                        self.selected = None;
+                    }
                 }
             }
         });

@@ -2,17 +2,17 @@ use anyhow::Context;
 use embassy_executor::Spawner;
 use embassy_futures::select::{Either, Either3, select, select3};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-use embassy_time::Duration;
+use embassy_time::{Duration, Instant};
 use log::debug;
 use moonblokz_radio_lib::{
     MAX_NODE_COUNT, RadioCommunicationManager, RadioMessage, RadioPacket, ReceivedPacket, ScoringMatrix,
     radio_device_simulator::{RadioInputQueue, RadioOutputQueue},
 };
 use serde::Deserialize;
-use std::collections::HashMap;
 use std::fs;
+use std::{collections::HashMap, time::Instant as StdInstant};
 
-use crate::{NodeUIState, UICommand, UICommandChannelReceiver, UIRefreshChannelSender, UIRefreshState};
+use crate::{NodeInfo, NodeUIState, UICommand, UICommandChannelReceiver, UIRefreshChannelSender, UIRefreshState};
 
 const NODE_INPUT_QUEUE_SIZE: usize = 10;
 type NodeInputQueue = embassy_sync::channel::Channel<CriticalSectionRawMutex, NodeInputMessage, NODE_INPUT_QUEUE_SIZE>;
@@ -31,6 +31,16 @@ struct Scene {
     obstacles: Vec<Obstacle>,
 }
 
+#[derive(Clone, Debug)]
+pub struct NodeMessage {
+    pub timestamp: StdInstant,
+    pub message_type: u8,
+    pub packet_size: usize,
+    pub packet_count: u8,
+    pub packet_index: u8,
+    pub sender_node: u32,
+}
+
 /// Node structure with position and radio strength
 #[derive(Deserialize, Clone)]
 struct Node {
@@ -39,6 +49,8 @@ struct Node {
     radio_strength: u32,
     #[serde(skip)]
     node_input_queue_sender: Option<NodeInputQueueSender>,
+    #[serde(skip)]
+    node_messages: Vec<NodeMessage>,
 }
 
 /// Simple 2D point
@@ -118,9 +130,9 @@ async fn node_task(spawner: Spawner, node_id: u32, out_tx: NodesOutputQueueSende
     let radio_config = moonblokz_radio_lib::RadioConfiguration {
         delay_between_tx_packets: 1,
         delay_between_tx_messages: 10,
-        echo_request_minimal_interval: 100,
-        echo_messages_target_interval: 10,
-        echo_gathering_timeout: 10,
+        echo_request_minimal_interval: 500,
+        echo_messages_target_interval: 1,
+        echo_gathering_timeout: 1,
         relay_position_delay: 1,
         scoring_matrix: ScoringMatrix::new_from_encoded(&[255u8, 243u8, 65u8, 82u8, 143u8]),
     };
@@ -176,15 +188,6 @@ async fn node_task(spawner: Spawner, node_id: u32, out_tx: NodesOutputQueueSende
 }
 
 #[embassy_executor::task]
-async fn nodes_send_task(idx: usize, manager: RadioCommunicationManager) {
-    loop {
-        // Example: periodically initiate an echo request
-        let _ = manager.send_message(RadioMessage::new_request_echo(1));
-        embassy_time::Timer::after(Duration::from_millis(1000)).await;
-    }
-}
-
-#[embassy_executor::task]
 pub(crate) async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshChannelSender, ui_command_rx: UICommandChannelReceiver) {
     let mut config_file_path_option = Option::None;
 
@@ -193,6 +196,7 @@ pub(crate) async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshChann
             UICommand::LoadFile(file_path) => {
                 config_file_path_option = Some(file_path);
             }
+            _ => {}
         }
     }
 
@@ -237,10 +241,6 @@ pub(crate) async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshChann
         ))
         .await;
 
-    ui_refresh_tx
-        .send(UIRefreshState::Alert(format!("Configuration file loaded with {} nodes", scene.nodes.len())))
-        .await;
-
     let nodes_output_channel = Box::leak(Box::new(NodesOutputQueue::new()));
 
     let mut nodes_map: HashMap<u32, Node> = HashMap::new();
@@ -254,46 +254,86 @@ pub(crate) async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshChann
         nodes_map.insert(new_node.node_id, new_node);
     }
     loop {
-        // Await forwarded messages from any node
-        log::debug!("Waiting for node output messages...");
-        match nodes_output_channel.receiver().receive().await {
-            NodeOutputMessage {
-                node_id,
-                payload: NodeOutputPayload::RadioTransfer(packet),
-            } => {
-                if let Some(node) = nodes_map.get(&node_id) {
-                    debug!("Received radio packet from node {}", node_id);
-                    ui_refresh_tx.try_send(UIRefreshState::NodeSentRadioMessage(node_id, node.radio_strength));
+        // Await forwarded messages from any node or UI commands
+        match select(nodes_output_channel.receiver().receive(), ui_command_rx.receive()).await {
+            Either::First(NodeOutputMessage { node_id, payload }) => match payload {
+                NodeOutputPayload::RadioTransfer(packet) => {
+                    if let Some(node) = nodes_map.get_mut(&node_id) {
+                        node.node_messages.push(NodeMessage {
+                            timestamp: StdInstant::now(),
+                            message_type: packet.message_type(),
+                            sender_node: node_id,
+                            packet_size: packet.length,
+                            packet_index: packet.packet_index(),
+                            packet_count: packet.total_packet_count(),
+                        });
+                    }
 
-                    for (_other_node_id, other_node) in nodes_map.iter().filter_map(|(id, node)| if *id != node_id { Some((id, node)) } else { None }) {
-                        if let Some(sender) = other_node.node_input_queue_sender.as_ref() {
-                            let _ = sender.try_send(NodeInputMessage::RadioTransfer(ReceivedPacket {
-                                packet: packet.clone(),
-                                link_quality: 63,
-                            }));
+                    let mut target_node_ids: Vec<u32> = vec![];
+                    if let Some(node) = nodes_map.get(&node_id) {
+                        //                    debug!("Received radio packet from node {}", node_id);
+                        _ = ui_refresh_tx.try_send(UIRefreshState::NodeSentRadioMessage(node_id, packet.message_type(), node.radio_strength));
+
+                        for (_other_node_id, other_node) in nodes_map.iter().filter_map(|(id, node)| if *id != node_id { Some((id, node)) } else { None }) {
+                            let distance = distance(&node.position, &other_node.position);
+                            if distance < node.radio_strength as f32 {
+                                if let Some(sender) = other_node.node_input_queue_sender.as_ref() {
+                                    //log::debug!("Transferring packet from node {} to node {}", node_id, other_node.node_id);
+                                    let _ = sender
+                                        .send(NodeInputMessage::RadioTransfer(ReceivedPacket {
+                                            packet: packet.clone(),
+                                            link_quality: 63,
+                                        }))
+                                        .await;
+                                    target_node_ids.push(other_node.node_id);
+                                }
+                            }
+                        }
+                    //                    debug!("Processed radio packet from node {}", node_id);
+                    } else {
+                        log::warn!("Received radio packet from unknown node {}", node_id);
+                    }
+
+                    for target_node_id in target_node_ids {
+                        if let Some(target_node) = nodes_map.get_mut(&target_node_id) {
+                            target_node.node_messages.push(NodeMessage {
+                                timestamp: StdInstant::now(),
+                                message_type: packet.message_type(),
+                                sender_node: node_id,
+                                packet_size: packet.length,
+                                packet_index: packet.packet_index(),
+                                packet_count: packet.total_packet_count(),
+                            });
                         }
                     }
-                    debug!("Processed radio packet from node {}", node_id);
-                } else {
-                    log::warn!("Received radio packet from unknown node {}", node_id);
                 }
-            }
-            NodeOutputMessage {
-                node_id,
-                payload: NodeOutputPayload::MessageReceived(message),
-            } => {}
-            NodeOutputMessage {
-                node_id,
-                payload: NodeOutputPayload::RequestCAD,
-            } => {
-                if let Some(node) = nodes_map.get(&node_id) {
-                    if let Some(sender) = &node.node_input_queue_sender {
-                        let _ = sender.send(NodeInputMessage::CADResponse(false)).await;
-                    } else {
-                        log::warn!("Node {} does not have an input queue sender", node_id);
+                NodeOutputPayload::MessageReceived(_message) => {
+                    // TODO: handle message receipt UI/state if needed
+                }
+                NodeOutputPayload::RequestCAD => {
+                    if let Some(node) = nodes_map.get(&node_id) {
+                        if let Some(sender) = &node.node_input_queue_sender {
+                            let _ = sender.send(NodeInputMessage::CADResponse(false)).await;
+                        } else {
+                            log::warn!("Node {} does not have an input queue sender", node_id);
+                        }
                     }
                 }
-            }
+            },
+            Either::Second(cmd) => match cmd {
+                UICommand::LoadFile(path) => {
+                    log::warn!("LoadFile command received after initialization: {} (ignored)", path);
+                }
+                UICommand::RequestNodeInfo(node_id) => {
+                    if let Some(node) = nodes_map.get(&node_id) {
+                        log::debug!("Requesting info for node {}", node_id);
+                        let _ = ui_refresh_tx.try_send(UIRefreshState::NodeInfo(NodeInfo {
+                            node_id: node.node_id,
+                            messages: node.node_messages.clone(),
+                        }));
+                    }
+                }
+            },
         }
     }
 }
