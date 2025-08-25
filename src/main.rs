@@ -244,13 +244,27 @@ impl eframe::App for AppState {
                     ui.label(egui::RichText::new(format!("{}", p.radio_strength)).strong());
                 });
                 ui.separator();
+
+                let mut sent_messages_count = 0;
+                let mut received_messages_count = 0;
+
+                if let Some(node_info) = &self.node_info {
+                    for msg in &node_info.messages {
+                        if msg.sender_node == p.node_id {
+                            sent_messages_count += 1;
+                        } else {
+                            received_messages_count += 1;
+                        }
+                    }
+                }
+
                 ui.horizontal(|ui| {
                     ui.label("Sent messages:");
-                    ui.label(egui::RichText::new(format!("{}", 45)).strong());
+                    ui.label(egui::RichText::new(format!("{}", sent_messages_count)).strong());
                 });
                 ui.horizontal(|ui| {
                     ui.label("Received messages:");
-                    ui.label(egui::RichText::new(format!("{}", 30)).strong());
+                    ui.label(egui::RichText::new(format!("{}", received_messages_count)).strong());
                 });
 
                 // Messages header (outside of bottom-up so it doesn't steal table space)
@@ -303,27 +317,48 @@ impl eframe::App for AppState {
                         ui.allocate_ui_with_layout(egui::vec2(avail_w, table_h), egui::Layout::top_down(egui::Align::LEFT), |ui| {
                             if let Some(node_info) = &self.node_info {
                                 if node_info.node_id == p.node_id {
-                                    egui::ScrollArea::vertical().show(ui, |ui| {
-                                        egui::Grid::new("messages_grid")
-                                            .striped(true)
-                                            .num_columns(6)
-                                            .spacing([30.0, 4.0])
-                                            .show(ui, |ui| {
-                                                // Header row
-                                                ui.strong("Timestamp");
-                                                ui.strong("From");
-                                                ui.strong("Type");
-                                                ui.strong("Packet");
-                                                ui.strong("Size");
-                                                ui.end_row();
+                                    use egui_extras::{Column, TableBuilder};
 
-                                                for msg in node_info.messages.iter().rev() {
+                                    let row_height = ui.text_style_height(&egui::TextStyle::Body) * 1.3;
+                                    // Ensure total table height (header + body) fits in the allocated space,
+                                    // otherwise the body would push into the buttons area by ~header height.
+                                    let header_h = row_height;
+                                    let body_min_h = (table_h - header_h).max(0.0);
+                                    TableBuilder::new(ui)
+                                        .striped(true)
+                                        .resizable(true)
+                                        .vscroll(true)
+                                        .min_scrolled_height(body_min_h)
+                                        .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+                                        .column(Column::initial(90.0).at_least(70.0)) // Timestamp
+                                        .column(Column::initial(70.0).at_least(60.0)) // From
+                                        .column(Column::remainder()) // Type
+                                        .column(Column::initial(80.0).at_least(60.0)) // Packet
+                                        .column(Column::initial(70.0).at_least(60.0)) // Size
+                                        .header(row_height, |mut header| {
+                                            header.col(|ui| {
+                                                ui.strong("Timestamp");
+                                            });
+                                            header.col(|ui| {
+                                                ui.strong("From");
+                                            });
+                                            header.col(|ui| {
+                                                ui.strong("Type");
+                                            });
+                                            header.col(|ui| {
+                                                ui.strong("Packet");
+                                            });
+                                            header.col(|ui| {
+                                                ui.strong("Size");
+                                            });
+                                        })
+                                        .body(|mut body| {
+                                            // newest-first
+                                            for msg in node_info.messages.iter().rev() {
+                                                body.row(row_height, |mut row| {
                                                     // Color rows red if from this node, else green
-                                                    let row_color = if node_info.node_id == msg.sender_node {
-                                                        Color32::RED
-                                                    } else {
-                                                        Color32::LIGHT_GREEN
-                                                    };
+                                                    let is_self = node_info.node_id == msg.sender_node;
+                                                    let row_color = if is_self { Color32::RED } else { Color32::LIGHT_GREEN };
                                                     let type_string = match msg.message_type {
                                                         1 => "Request echo",
                                                         2 => "Echo",
@@ -336,25 +371,28 @@ impl eframe::App for AppState {
                                                         9 => "Support",
                                                         _ => "Unknown",
                                                     };
-
-                                                    let from_string = if node_info.node_id == msg.sender_node {
-                                                        "-".to_string()
-                                                    } else {
-                                                        format!("#{}", msg.sender_node)
-                                                    };
-                                                    // Relative time in seconds since app start
+                                                    let from_string = if is_self { "-".to_string() } else { format!("#{}", msg.sender_node) };
                                                     let secs = msg.timestamp.duration_since(self.start_time).as_secs();
-
                                                     let message_type_color = color_for_message_type(msg.message_type, 1.0);
-                                                    ui.colored_label(row_color, format!("{} s", secs));
-                                                    ui.colored_label(row_color, format!("{}", from_string));
-                                                    ui.colored_label(message_type_color, format!("{}", type_string));
-                                                    ui.colored_label(row_color, format!("{}/{}", msg.packet_index + 1, msg.packet_count));
-                                                    ui.colored_label(row_color, format!("{} B", msg.packet_size));
-                                                    ui.end_row();
-                                                }
-                                            });
-                                    });
+
+                                                    row.col(|ui| {
+                                                        ui.colored_label(row_color, format!("{} s", secs));
+                                                    });
+                                                    row.col(|ui| {
+                                                        ui.colored_label(row_color, from_string);
+                                                    });
+                                                    row.col(|ui| {
+                                                        ui.colored_label(message_type_color, type_string);
+                                                    });
+                                                    row.col(|ui| {
+                                                        ui.colored_label(row_color, format!("{}/{}", msg.packet_index + 1, msg.packet_count));
+                                                    });
+                                                    row.col(|ui| {
+                                                        ui.colored_label(row_color, format!("{} B", msg.packet_size));
+                                                    });
+                                                });
+                                            }
+                                        });
                                 }
                             }
                         });
