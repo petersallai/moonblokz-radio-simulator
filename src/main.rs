@@ -352,46 +352,50 @@ impl eframe::App for AppState {
                                                 ui.strong("Size");
                                             });
                                         })
-                                        .body(|mut body| {
-                                            // newest-first
-                                            for msg in node_info.messages.iter().rev() {
-                                                body.row(row_height, |mut row| {
-                                                    // Color rows red if from this node, else green
-                                                    let is_self = node_info.node_id == msg.sender_node;
-                                                    let row_color = if is_self { Color32::RED } else { Color32::LIGHT_GREEN };
-                                                    let type_string = match msg.message_type {
-                                                        1 => "Request echo",
-                                                        2 => "Echo",
-                                                        3 => "Echo result",
-                                                        4 => "Request block",
-                                                        5 => "Request block part",
-                                                        6 => "Add block",
-                                                        7 => "Add transaction",
-                                                        8 => "Mempool request",
-                                                        9 => "Support",
-                                                        _ => "Unknown",
-                                                    };
-                                                    let from_string = if is_self { "-".to_string() } else { format!("#{}", msg.sender_node) };
-                                                    let secs = msg.timestamp.duration_since(self.start_time).as_secs();
-                                                    let message_type_color = color_for_message_type(msg.message_type, 1.0);
+                                        .body(|body| {
+                                            // Virtualized rows: only build visible rows; keep newest-first order
+                                            let row_count = node_info.messages.len();
+                                            body.rows(row_height, row_count, |mut row| {
+                                                // Map visible row index to reversed (newest-first) index
+                                                let row_index = row.index();
+                                                let msg_idx = row_count - 1 - row_index;
+                                                let msg = &node_info.messages[msg_idx];
 
-                                                    row.col(|ui| {
-                                                        ui.colored_label(row_color, format!("{} s", secs));
-                                                    });
-                                                    row.col(|ui| {
-                                                        ui.colored_label(row_color, from_string);
-                                                    });
-                                                    row.col(|ui| {
-                                                        ui.colored_label(message_type_color, type_string);
-                                                    });
-                                                    row.col(|ui| {
-                                                        ui.colored_label(row_color, format!("{}/{}", msg.packet_index + 1, msg.packet_count));
-                                                    });
-                                                    row.col(|ui| {
-                                                        ui.colored_label(row_color, format!("{} B", msg.packet_size));
-                                                    });
+                                                // Color rows red if from this node, else green
+                                                let is_self = node_info.node_id == msg.sender_node;
+                                                let row_color = if is_self { Color32::RED } else { Color32::LIGHT_GREEN };
+                                                let type_string = match msg.message_type {
+                                                    1 => "Request echo",
+                                                    2 => "Echo",
+                                                    3 => "Echo result",
+                                                    4 => "Request block",
+                                                    5 => "Request block part",
+                                                    6 => "Add block",
+                                                    7 => "Add transaction",
+                                                    8 => "Mempool request",
+                                                    9 => "Support",
+                                                    _ => "Unknown",
+                                                };
+                                                let from_string = if is_self { "-".to_string() } else { format!("#{}", msg.sender_node) };
+                                                let secs = msg.timestamp.duration_since(self.start_time).as_secs();
+                                                let message_type_color = color_for_message_type(msg.message_type, 1.0);
+
+                                                row.col(|ui| {
+                                                    ui.colored_label(row_color, format!("{} s", secs));
                                                 });
-                                            }
+                                                row.col(|ui| {
+                                                    ui.colored_label(row_color, from_string);
+                                                });
+                                                row.col(|ui| {
+                                                    ui.colored_label(message_type_color, type_string);
+                                                });
+                                                row.col(|ui| {
+                                                    ui.colored_label(row_color, format!("{}/{}", msg.packet_index + 1, msg.packet_count));
+                                                });
+                                                row.col(|ui| {
+                                                    ui.colored_label(row_color, format!("{} B", msg.packet_size));
+                                                });
+                                            });
                                         });
                                 }
                             }
@@ -494,7 +498,6 @@ impl eframe::App for AppState {
                         if let Some(new_selected) = new_selected {
                             let node_id = &self.nodes[new_selected].node_id;
                             self.ui_command_tx.try_send(UICommand::RequestNodeInfo(node_id.clone())).ok();
-                            log::debug!("Selected node {}", node_id);
                         }
                     } else {
                         self.selected = None;

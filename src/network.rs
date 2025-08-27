@@ -326,7 +326,6 @@ pub(crate) async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshChann
                 }
                 UICommand::RequestNodeInfo(node_id) => {
                     if let Some(node) = nodes_map.get(&node_id) {
-                        log::debug!("Requesting info for node {}", node_id);
                         let _ = ui_refresh_tx.try_send(UIRefreshState::NodeInfo(NodeInfo {
                             node_id: node.node_id,
                             messages: node.node_messages.clone(),
