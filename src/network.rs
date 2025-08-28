@@ -2,7 +2,7 @@ use anyhow::Context;
 use embassy_executor::Spawner;
 use embassy_futures::select::{Either, Either3, select, select3};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-use embassy_time::{Duration, Instant};
+use embassy_time::{Duration, Instant, Timer};
 use log::debug;
 use moonblokz_radio_lib::{
     MAX_NODE_COUNT, RadioCommunicationManager, RadioMessage, RadioPacket, ReceivedPacket, ScoringMatrix,
@@ -10,9 +10,16 @@ use moonblokz_radio_lib::{
 };
 use serde::Deserialize;
 use std::fs;
+use std::process::exit;
 use std::{collections::HashMap, time::Instant as StdInstant};
 
-use crate::{NodeInfo, NodeUIState, UICommand, UICommandChannelReceiver, UIRefreshChannelSender, UIRefreshState};
+use crate::{
+    NodeInfo, NodeUIState, UICommand, UICommandChannelReceiver, UIRefreshChannelSender, UIRefreshState,
+    signal_calculations::{
+        LoraParameters, PathLossParameters, calculate_air_time, calculate_effective_distance, calculate_path_loss, calculate_receiving_limit_with_basic_noise,
+        calculate_rssi, calculate_snr_limit, calculate_tx_power_from_effective_distance, dbm_to_mw, mw_to_dbm,
+    },
+};
 
 const NODE_INPUT_QUEUE_SIZE: usize = 10;
 type NodeInputQueue = embassy_sync::channel::Channel<CriticalSectionRawMutex, NodeInputMessage, NODE_INPUT_QUEUE_SIZE>;
@@ -27,11 +34,13 @@ type NodesOutputQueueSender = embassy_sync::channel::Sender<'static, CriticalSec
 /// Root structure representing the entire scene
 #[derive(Deserialize)]
 struct Scene {
+    path_loss_parameters: PathLossParameters,
+    lora_parameters: LoraParameters,
     nodes: Vec<Node>,
     obstacles: Vec<Obstacle>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug, Clone)]
 pub struct NodeMessage {
     pub timestamp: StdInstant,
     pub message_type: u8,
@@ -39,6 +48,17 @@ pub struct NodeMessage {
     pub packet_count: u8,
     pub packet_index: u8,
     pub sender_node: u32,
+    pub collision: bool,
+}
+
+#[derive(Clone)]
+pub struct AirtimeWaitingPacket {
+    packet: RadioPacket,
+    sender_node_id: u32,
+    start_time: Instant,
+    airtime: Duration,
+    processed: bool,
+    rssi: f32,
 }
 
 /// Node structure with position and radio strength
@@ -46,11 +66,13 @@ pub struct NodeMessage {
 struct Node {
     node_id: u32,
     position: Point,
-    radio_strength: u32,
+    radio_strength: f32,
     #[serde(skip)]
     node_input_queue_sender: Option<NodeInputQueueSender>,
     #[serde(skip)]
     node_messages: Vec<NodeMessage>,
+    #[serde(skip)]
+    airtime_waiting_packets: Vec<AirtimeWaitingPacket>,
 }
 
 /// Simple 2D point
@@ -235,7 +257,7 @@ pub(crate) async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshChann
                         x: n.position.x,
                         y: n.position.y,
                     },
-                    radio_strength: n.radio_strength,
+                    radio_strength: calculate_effective_distance(n.radio_strength as f32, &scene.lora_parameters, &scene.path_loss_parameters) as u32,
                 })
                 .collect(),
         ))
@@ -254,10 +276,29 @@ pub(crate) async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshChann
         nodes_map.insert(new_node.node_id, new_node);
     }
     loop {
+        let mut next_airtime_event = Instant::now() + Duration::from_secs(3600);
+        for node in nodes_map.values_mut() {
+            for airtime_waiting_packet in node.airtime_waiting_packets.iter_mut() {
+                if !airtime_waiting_packet.processed {
+                    let packet_end_time = airtime_waiting_packet.start_time + airtime_waiting_packet.airtime;
+                    if packet_end_time < next_airtime_event {
+                        next_airtime_event = packet_end_time;
+                    }
+                }
+            }
+        }
         // Await forwarded messages from any node or UI commands
-        match select(nodes_output_channel.receiver().receive(), ui_command_rx.receive()).await {
-            Either::First(NodeOutputMessage { node_id, payload }) => match payload {
+        match select3(
+            nodes_output_channel.receiver().receive(),
+            ui_command_rx.receive(),
+            Timer::at(next_airtime_event),
+        )
+        .await
+        {
+            Either3::First(NodeOutputMessage { node_id, payload }) => match payload {
                 NodeOutputPayload::RadioTransfer(packet) => {
+                    let node_position;
+                    let node_radio_strength;
                     if let Some(node) = nodes_map.get_mut(&node_id) {
                         node.node_messages.push(NodeMessage {
                             timestamp: StdInstant::now(),
@@ -266,45 +307,58 @@ pub(crate) async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshChann
                             packet_size: packet.length,
                             packet_index: packet.packet_index(),
                             packet_count: packet.total_packet_count(),
+                            collision: false,
                         });
+
+                        //add to our queue to handle tx,rx collisions
+                        node.airtime_waiting_packets.push(AirtimeWaitingPacket {
+                            packet: packet.clone(),
+                            sender_node_id: node_id,
+                            start_time: Instant::now(),
+                            airtime: Duration::from_millis((calculate_air_time(scene.lora_parameters.clone(), packet.length) * 1000.0) as u64),
+                            rssi: calculate_rssi(0.0, node.radio_strength, &scene.path_loss_parameters),
+                            processed: true,
+                        });
+
+                        node_position = Some(node.position.clone());
+                        node_radio_strength = Some(node.radio_strength);
+                    } else {
+                        continue;
                     }
 
-                    let mut target_node_ids: Vec<u32> = vec![];
-                    if let Some(node) = nodes_map.get(&node_id) {
-                        //                    debug!("Received radio packet from node {}", node_id);
-                        _ = ui_refresh_tx.try_send(UIRefreshState::NodeSentRadioMessage(node_id, packet.message_type(), node.radio_strength));
+                    if let (Some(node_position), Some(node_radio_strength)) = (node_position, node_radio_strength) {
+                        let mut target_node_ids: Vec<u32> = vec![];
+                        _ = ui_refresh_tx.try_send(UIRefreshState::NodeSentRadioMessage(
+                            node_id,
+                            packet.message_type(),
+                            calculate_effective_distance(node_radio_strength as f32, &scene.lora_parameters, &scene.path_loss_parameters) as u32,
+                        ));
 
                         for (_other_node_id, other_node) in nodes_map.iter().filter_map(|(id, node)| if *id != node_id { Some((id, node)) } else { None }) {
-                            let distance = distance(&node.position, &other_node.position);
-                            if distance < node.radio_strength as f32 {
-                                if let Some(sender) = other_node.node_input_queue_sender.as_ref() {
-                                    //log::debug!("Transferring packet from node {} to node {}", node_id, other_node.node_id);
-                                    let _ = sender
-                                        .send(NodeInputMessage::RadioTransfer(ReceivedPacket {
-                                            packet: packet.clone(),
-                                            link_quality: 63,
-                                        }))
-                                        .await;
-                                    target_node_ids.push(other_node.node_id);
+                            let distance = distance(&node_position, &other_node.position);
+                            if distance < calculate_effective_distance(node_radio_strength as f32, &scene.lora_parameters, &scene.path_loss_parameters) {
+                                target_node_ids.push(other_node.node_id);
+                            }
+                        }
+                        //                    debug!("Processed radio packet from node {}", node_id);
+
+                        for target_node_id in target_node_ids {
+                            if let Some(target_node) = nodes_map.get_mut(&target_node_id) {
+                                let distance = distance(&node_position, &target_node.position);
+                                if distance < calculate_effective_distance(node_radio_strength as f32, &scene.lora_parameters, &scene.path_loss_parameters) {
+                                    target_node.airtime_waiting_packets.push(AirtimeWaitingPacket {
+                                        packet: packet.clone(),
+                                        sender_node_id: node_id,
+                                        start_time: Instant::now(),
+                                        airtime: Duration::from_millis((calculate_air_time(scene.lora_parameters.clone(), packet.length) * 1000.0) as u64),
+                                        rssi: calculate_rssi(distance as f32, node_radio_strength, &scene.path_loss_parameters),
+                                        processed: false,
+                                    });
                                 }
                             }
                         }
-                    //                    debug!("Processed radio packet from node {}", node_id);
                     } else {
                         log::warn!("Received radio packet from unknown node {}", node_id);
-                    }
-
-                    for target_node_id in target_node_ids {
-                        if let Some(target_node) = nodes_map.get_mut(&target_node_id) {
-                            target_node.node_messages.push(NodeMessage {
-                                timestamp: StdInstant::now(),
-                                message_type: packet.message_type(),
-                                sender_node: node_id,
-                                packet_size: packet.length,
-                                packet_index: packet.packet_index(),
-                                packet_count: packet.total_packet_count(),
-                            });
-                        }
                     }
                 }
                 NodeOutputPayload::MessageReceived(_message) => {
@@ -320,7 +374,7 @@ pub(crate) async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshChann
                     }
                 }
             },
-            Either::Second(cmd) => match cmd {
+            Either3::Second(cmd) => match cmd {
                 UICommand::LoadFile(path) => {
                     log::warn!("LoadFile command received after initialization: {} (ignored)", path);
                 }
@@ -333,6 +387,94 @@ pub(crate) async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshChann
                     }
                 }
             },
+            Either3::Third(_) => {
+                for (_id, node) in nodes_map.iter_mut() {
+                    //clean outdated items from airtime_waiting_packets
+                    //get the earliest start time of unprocessed items
+                    let mut earliest_start_time = Instant::now();
+                    for packet in &node.airtime_waiting_packets {
+                        if !packet.processed {
+                            if packet.start_time < earliest_start_time {
+                                earliest_start_time = packet.start_time;
+                            }
+                        }
+                    }
+
+                    //delete all processed packets where end_time<earliest_start_time
+                    node.airtime_waiting_packets
+                        .retain(|packet| !packet.processed || packet.start_time + packet.airtime >= earliest_start_time);
+
+                    //get the index, start_time,end_time of the next packet to process
+                    let mut packet_to_process_index: Option<usize> = None;
+                    let mut packet_to_process_start_time = Instant::now();
+                    let mut packet_to_process_end_time = Instant::now();
+
+                    for (i, packet) in node.airtime_waiting_packets.iter().enumerate() {
+                        if !packet.processed {
+                            packet_to_process_index = Some(i);
+                            packet_to_process_start_time = packet.start_time;
+                            packet_to_process_end_time = packet.start_time + packet.airtime;
+                            break;
+                        }
+                    }
+
+                    //calculate total noise
+                    if let Some(packet_to_process_index) = packet_to_process_index {
+                        node.airtime_waiting_packets[packet_to_process_index].processed = true;
+                        let mut sum_noise = dbm_to_mw(scene.path_loss_parameters.noise_floor);
+                        let mut collision = false;
+
+                        for (i, packet) in node.airtime_waiting_packets.iter().enumerate() {
+                            if i != packet_to_process_index {
+                                if packet.start_time < packet_to_process_end_time && packet.start_time + packet.airtime > packet_to_process_start_time {
+                                    sum_noise += dbm_to_mw(packet.rssi);
+                                    collision = true;
+                                }
+                            }
+                        }
+
+                        let total_noise = mw_to_dbm(sum_noise);
+
+                        let sinr = node.airtime_waiting_packets[packet_to_process_index].rssi - total_noise;
+
+                        if sinr >= calculate_snr_limit(&scene.lora_parameters) {
+                            if let Some(sender) = &node.node_input_queue_sender {
+                                let link_quality =
+                                    moonblokz_radio_lib::calculate_link_quality(node.airtime_waiting_packets[packet_to_process_index].rssi as i16, sinr as i16);
+
+                                let _ = sender
+                                    .send(NodeInputMessage::RadioTransfer(ReceivedPacket {
+                                        packet: node.airtime_waiting_packets[packet_to_process_index].packet.clone(),
+                                        link_quality,
+                                    }))
+                                    .await;
+                            } else {
+                                log::warn!("Node {} does not have an input queue sender", node.node_id);
+                            }
+
+                            node.node_messages.push(NodeMessage {
+                                timestamp: StdInstant::now(),
+                                message_type: node.airtime_waiting_packets[packet_to_process_index].packet.message_type(),
+                                sender_node: node.airtime_waiting_packets[packet_to_process_index].sender_node_id,
+                                packet_size: node.airtime_waiting_packets[packet_to_process_index].packet.length,
+                                packet_index: node.airtime_waiting_packets[packet_to_process_index].packet.packet_index(),
+                                packet_count: node.airtime_waiting_packets[packet_to_process_index].packet.total_packet_count(),
+                                collision: false,
+                            });
+                        } else if collision {
+                            node.node_messages.push(NodeMessage {
+                                timestamp: StdInstant::now(),
+                                message_type: node.airtime_waiting_packets[packet_to_process_index].packet.message_type(),
+                                sender_node: node.airtime_waiting_packets[packet_to_process_index].sender_node_id,
+                                packet_size: node.airtime_waiting_packets[packet_to_process_index].packet.length,
+                                packet_index: node.airtime_waiting_packets[packet_to_process_index].packet.packet_index(),
+                                packet_count: node.airtime_waiting_packets[packet_to_process_index].packet.total_packet_count(),
+                                collision: true,
+                            });
+                        }
+                    }
+                }
+            }
         }
     }
 }

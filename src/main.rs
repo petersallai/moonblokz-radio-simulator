@@ -13,6 +13,7 @@ use crate::network::NodeMessage;
 use crate::network::Point;
 
 mod network;
+mod signal_calculations;
 
 const UI_REFRESH_CHANNEL_SIZE: usize = 10;
 type UIRefreshChannel = embassy_sync::channel::Channel<CriticalSectionRawMutex, UIRefreshState, UI_REFRESH_CHANNEL_SIZE>;
@@ -270,7 +271,7 @@ impl eframe::App for AppState {
                 // Messages header (outside of bottom-up so it doesn't steal table space)
                 if let Some(node_info) = &self.node_info {
                     ui.separator();
-                    ui.heading(format!("Message stream for #{}", node_info.node_id));
+                    ui.heading(format!("Radio stream for #{}", node_info.node_id));
                     ui.add_space(4.0);
                 }
 
@@ -363,7 +364,10 @@ impl eframe::App for AppState {
 
                                                 // Color rows red if from this node, else green
                                                 let is_self = node_info.node_id == msg.sender_node;
-                                                let row_color = if is_self { Color32::RED } else { Color32::LIGHT_GREEN };
+                                                let mut row_color = if is_self { Color32::RED } else { Color32::LIGHT_GREEN };
+                                                if msg.collision {
+                                                    row_color = Color32::YELLOW;
+                                                }
                                                 let type_string = match msg.message_type {
                                                     1 => "Request echo",
                                                     2 => "Echo",
