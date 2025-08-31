@@ -1,3 +1,4 @@
+use embassy_time::Duration;
 use rand::thread_rng;
 use rand_distr::{Distribution, Normal};
 use serde::Deserialize;
@@ -141,4 +142,16 @@ pub(crate) fn dbm_to_mw(dbm: f32) -> f32 {
 }
 pub(crate) fn mw_to_dbm(mw: f32) -> f32 {
     10.0 * mw.log10()
+}
+
+pub(crate) fn get_preamble_time(lora_parameters: &LoraParameters) -> Duration {
+    // Calculate the preamble time based on LoRa parameters
+    let symbol_time = 2.0_f32.powi(lora_parameters.spreading_factor as i32) / lora_parameters.bandwidth as f32;
+    Duration::from_micros(((lora_parameters.preamble_symbols + 4.25) * symbol_time * 1000000.0) as u64)
+}
+
+pub(crate) fn get_cad_time(lora_parameters: &LoraParameters) -> Duration {
+    // Typical length of Lora CAD is the time of 2 symbols
+    let symbol_time = 2.0_f32.powi(lora_parameters.spreading_factor as i32) / lora_parameters.bandwidth as f32;
+    Duration::from_micros((2.0 * symbol_time * 1000000.0) as u64)
 }
