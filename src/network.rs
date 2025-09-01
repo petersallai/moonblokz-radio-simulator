@@ -177,11 +177,11 @@ async fn node_task(spawner: Spawner, node_id: u32, out_tx: NodesOutputQueueSende
 
     let radio_config = moonblokz_radio_lib::RadioConfiguration {
         delay_between_tx_packets: 1,
-        delay_between_tx_messages: 20,
-        echo_request_minimal_interval: 10000,
-        echo_messages_target_interval: 255,
-        echo_gathering_timeout: 10,
-        relay_position_delay: 1,
+        delay_between_tx_messages: 10,
+        echo_request_minimal_interval: 100,
+        echo_messages_target_interval: 100,
+        echo_gathering_timeout: 2,
+        relay_position_delay: 10,
         scoring_matrix: ScoringMatrix::new_from_encoded(&[255u8, 243u8, 65u8, 82u8, 143u8]),
     };
 
@@ -304,7 +304,7 @@ pub(crate) async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshChann
     };
 
     for node in scene.nodes.iter_mut() {
-        node.radio_strength = node.radio_strength * 1.5;
+        node.radio_strength = 18.0;
     }
 
     ui_refresh_tx

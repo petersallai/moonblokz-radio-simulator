@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-eframe = { version = "0.27", default-features = false, features = ["wgpu"] }
+eframe = { version = "0.27", default-features = false, features = ["wgpu","persistence"] }
 egui = { version = "0.27", features = ["default_fonts"] }
 egui_extras = "0.27"
 embassy-executor = { version = "0.7.0", features = ["arch-std"]}
@@ -20,3 +20,4 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
 rand_distr = "0.4"
+rfd="0.15.4"

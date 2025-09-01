@@ -4,6 +4,9 @@ use embassy_executor::{Executor, Spawner};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use env_logger::Builder;
 use log::{LevelFilter, debug, info};
+use moonblokz_radio_lib::MessageType;
+use rfd::FileDialog;
+use serde::{Deserialize, Serialize};
 use std::cmp::max;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -79,10 +82,22 @@ struct AppState {
     measurement_identifier: u32,
     reached_nodes: HashSet<u32>,
     measurement_start_time: Instant,
+    scene_file_selected: bool,
+    // Persistence: last directory used for scene file chooser
+    last_open_dir: Option<String>,
+    echo_result_count: u32,
+}
+
+#[derive(Default, Serialize, Deserialize)]
+struct PersistedSettings {
+    last_open_dir: Option<String>,
 }
 
 impl AppState {
-    fn new(rx: UIRefreshChannelReceiver, tx: UICommandChannelSender) -> Self {
+    fn new(rx: UIRefreshChannelReceiver, tx: UICommandChannelSender, storage: Option<&dyn eframe::Storage>) -> Self {
+        // Load persisted settings if available
+        let persisted: PersistedSettings = storage.and_then(|s| eframe::get_value(s, "app_settings")).unwrap_or_default();
+
         Self {
             alert: None,
             ui_refresh_rx: rx,
@@ -100,6 +115,9 @@ impl AppState {
             measurement_identifier: 0,
             reached_nodes: HashSet::new(),
             measurement_start_time: Instant::now(),
+            scene_file_selected: false,
+            last_open_dir: persisted.last_open_dir,
+            echo_result_count: 0,
         }
     }
 }
@@ -120,7 +138,30 @@ fn color_for_message_type(message_type: u8, alpha: f32) -> Color32 {
 }
 
 impl eframe::App for AppState {
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        let settings = PersistedSettings {
+            last_open_dir: self.last_open_dir.clone(),
+        };
+        eframe::set_value(storage, "app_settings", &settings);
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if !self.scene_file_selected {
+            let mut dialog = FileDialog::new().add_filter("text", &["json"]);
+            if let Some(dir) = &self.last_open_dir {
+                dialog = dialog.set_directory(dir);
+            }
+            let files = dialog.pick_file();
+            if let Some(file) = files {
+                let _ = self.ui_command_tx.try_send(UICommand::LoadFile(file.to_str().unwrap().to_string()));
+                self.scene_file_selected = true;
+                // Remember directory for next time
+                if let Some(parent) = file.parent() {
+                    self.last_open_dir = Some(parent.to_string_lossy().to_string());
+                }
+            }
+        }
+
         // Repaint periodically so background updates are visible without input
         ctx.request_repaint_after(Duration::from_millis(50));
 
@@ -149,6 +190,11 @@ impl eframe::App for AppState {
                 UIRefreshState::NodeSentRadioMessage(node_id, message_type, distance) => {
                     self.node_radio_transfer_indicators
                         .insert(node_id, (Instant::now() + NODE_RADIO_TRANSFER_INDICATOR_DURATION, message_type, distance));
+                    if message_type == MessageType::EchoResult as u8 {
+                        self.echo_result_count += 1;
+
+                        info!("Received {} echo results so far", self.echo_result_count);
+                    }
                 }
                 UIRefreshState::NodeInfo(node_info) => {
                     self.node_info = Some(node_info);
@@ -678,7 +724,6 @@ fn main() {
         })
         .expect("failed to spawn embassy thread");
 
-    let _ = ui_command_tx.try_send(UICommand::LoadFile("test_simulation.json".to_string()));
     // Start the GUI on the main thread (required on macOS)
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default(),
@@ -687,6 +732,6 @@ fn main() {
     let _ = eframe::run_native(
         "MoonBlokz Radio Simulator",
         native_options,
-        Box::new(move |_cc| Box::new(AppState::new(ui_refresh_rx, ui_command_tx))),
+        Box::new(move |cc| Box::new(AppState::new(ui_refresh_rx, ui_command_tx, cc.storage))),
     );
 }
