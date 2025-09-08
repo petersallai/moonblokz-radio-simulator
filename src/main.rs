@@ -20,8 +20,9 @@ use crate::network::Point;
 
 mod network;
 mod signal_calculations;
+mod time_driver;
 
-const UI_REFRESH_CHANNEL_SIZE: usize = 100;
+const UI_REFRESH_CHANNEL_SIZE: usize = 500;
 type UIRefreshChannel = embassy_sync::channel::Channel<CriticalSectionRawMutex, UIRefreshState, UI_REFRESH_CHANNEL_SIZE>;
 type UIRefreshChannelReceiver = embassy_sync::channel::Receiver<'static, CriticalSectionRawMutex, UIRefreshState, UI_REFRESH_CHANNEL_SIZE>;
 type UIRefreshChannelSender = embassy_sync::channel::Sender<'static, CriticalSectionRawMutex, UIRefreshState, UI_REFRESH_CHANNEL_SIZE>;
@@ -86,6 +87,11 @@ struct AppState {
     // Persistence: last directory used for scene file chooser
     last_open_dir: Option<String>,
     echo_result_count: u32,
+    // Simulation speed control (percentage)
+    speed_percent: u32,
+    measurement_50_time: u64,
+    measurement_90_time: u64,
+    measurement_100_time: u64,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -118,6 +124,10 @@ impl AppState {
             scene_file_selected: false,
             last_open_dir: persisted.last_open_dir,
             echo_result_count: 0,
+            speed_percent: crate::time_driver::get_ui_speed_percent(),
+            measurement_50_time: 0,
+            measurement_90_time: 0,
+            measurement_100_time: 0,
         }
     }
 }
@@ -265,7 +275,8 @@ impl eframe::App for AppState {
                     ui.horizontal(|ui| {
                         ui.label("Sim time:");
                         // Fixed-width, monospace time so following labels don't shift horizontally
-                        let sim_secs = Instant::now().duration_since(self.start_time).as_secs();
+                        // Use embassy_time Instant for simulation time (scaled by driver)
+                        let sim_secs = embassy_time::Instant::now().as_secs();
                         let sim_time_str = format!("{:<6}", sim_secs); // fixed 6 chars, left-aligned (e.g., "42    ")
                         ui.label(egui::RichText::new(sim_time_str).monospace().strong());
                         ui.label(" Total TX: ");
@@ -308,8 +319,42 @@ impl eframe::App for AppState {
                         "-".into()
                     };
 
+                    let distribution_percentage = if self.nodes.len() > 0 && self.measurement_identifier > 0 {
+                        (self.reached_nodes.len() as f64 / self.nodes.len() as f64) * 100.0
+                    } else {
+                        0.0
+                    };
+
                     let distribution_percentage_string = if self.nodes.len() > 0 && self.measurement_identifier > 0 {
-                        format!("{:.0}", (self.reached_nodes.len() as f64 / self.nodes.len() as f64) * 100.0)
+                        format!("{:.0}", distribution_percentage)
+                    } else {
+                        "-".into()
+                    };
+
+                    if distribution_percentage >= 50.0 && self.measurement_50_time == 0 {
+                        self.measurement_50_time = self.measurement_start_time.elapsed().as_secs();
+                    }
+
+                    if distribution_percentage >= 90.0 && self.measurement_90_time == 0 {
+                        self.measurement_90_time = self.measurement_start_time.elapsed().as_secs();
+                    }
+
+                    if distribution_percentage >= 99.9 && self.measurement_100_time == 0 {
+                        self.measurement_100_time = self.measurement_start_time.elapsed().as_secs();
+                    }
+
+                    let measurement_50_time_string = if self.measurement_50_time > 0 {
+                        format!("{}", self.measurement_50_time)
+                    } else {
+                        "-".into()
+                    };
+                    let measurement_90_time_string = if self.measurement_90_time > 0 {
+                        format!("{}", self.measurement_90_time)
+                    } else {
+                        "-".into()
+                    };
+                    let measurement_100_time_string = if self.measurement_100_time > 0 {
+                        format!("{}", self.measurement_100_time)
                     } else {
                         "-".into()
                     };
@@ -322,13 +367,24 @@ impl eframe::App for AppState {
                         ui.label(" seconds");
                     });
                     ui.horizontal(|ui| {
-                        ui.label("Total nodes accessed: ");
-                        ui.label(egui::RichText::new(format!("{}", total_nodes_accessed_string)).strong());
-                    });
-                    ui.horizontal(|ui| {
                         ui.label("Distribution percentage: ");
                         ui.label(egui::RichText::new(format!("{}", distribution_percentage_string)).strong());
                         ui.label("%");
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("50% time: ");
+                        ui.label(egui::RichText::new(format!("{}", measurement_50_time_string)).strong());
+                        ui.label("seconds");
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("90% time: ");
+                        ui.label(egui::RichText::new(format!("{}", measurement_90_time_string)).strong());
+                        ui.label("seconds");
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("100% time: ");
+                        ui.label(egui::RichText::new(format!("{}", measurement_100_time_string)).strong());
+                        ui.label("seconds");
                     });
                 });
 
@@ -336,11 +392,16 @@ impl eframe::App for AppState {
                 cols[2].vertical(|ui| {
                     ui.heading("Controls");
                     ui.separator();
-                    if ui.button("Start").clicked() {
-                        debug!("Start clicked");
-                    }
-                    if ui.button("Stop").clicked() {
-                        debug!("Stop clicked");
+                    ui.horizontal(|ui| {
+                        ui.label("Speed:");
+                        let mut speed = self.speed_percent as f64;
+                        if ui.add(egui::Slider::new(&mut speed, 10.0..=400.0).suffix("%")).changed() {
+                            self.speed_percent = speed.round() as u32;
+                            crate::time_driver::set_ui_speed_percent(self.speed_percent);
+                        }
+                    });
+                    if ui.button("Auto").clicked() {
+                        debug!("Auto clicked");
                     }
                     if ui.button("Reset").clicked() {
                         debug!("Reset clicked");
@@ -436,6 +497,9 @@ impl eframe::App for AppState {
                                 } else {
                                     self.reached_nodes.clear();
                                     self.measurement_identifier = 0;
+                                    self.measurement_50_time = 0;
+                                    self.measurement_90_time = 0;
+                                    self.measurement_100_time = 0;
                                 }
                             }
                         });

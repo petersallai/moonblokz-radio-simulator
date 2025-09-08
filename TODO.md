@@ -1,0 +1,5 @@
+- Time speed control implementation
+- Obstacle implementation
+- Generate multiple test maps
+- Dynamic size handling
+- Network link quality in radio message flow

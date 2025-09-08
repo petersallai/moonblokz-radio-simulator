@@ -9,7 +9,8 @@ egui = { version = "0.27", features = ["default_fonts"] }
 egui_extras = "0.27"
 embassy-executor = { version = "0.7.0", features = ["arch-std"]}
 embassy-futures = { version = "0.1.1"}
-embassy-time = { version = "0.4.0",features = ["std"]}
+embassy-time = { version = "0.4.0" }
+embassy-time-driver = "0.2"
 moonblokz-radio-lib = { path = "../moonblokz-radio-lib",default-features = false, features = ["radio-device-simulator"]}
 log = "0.4"
 env_logger = "0.11"

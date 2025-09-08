@@ -1,7 +1,7 @@
 {
   "path_loss_parameters": {
-    "path_loss_exponent": 3.0,
-    "shadowing_sigma": 5.0,
+    "path_loss_exponent": 2.5,
+    "shadowing_sigma": 3.0,
     "path_loss_at_reference_distance": 38.0,
     "noise_floor": -117.0
   },
@@ -12,6 +12,15 @@
     "preamble_symbols": 8.0,
     "crc_enabled": true,
     "low_data_rate_optimization": false
+  },
+    "radio_module_config": {
+    "delay_between_tx_packets": 1,
+    "delay_between_tx_messages": 10,
+    "echo_request_minimal_interval": 200,
+    "echo_messages_target_interval": 100,
+    "echo_gathering_timeout": 1,
+    "relay_position_delay": 20,
+    "scoring_matrix": [255, 243, 65, 82, 143]
   },
   "nodes": [
     {

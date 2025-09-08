@@ -1,28 +1,23 @@
 use anyhow::Context;
 use embassy_executor::Spawner;
-use embassy_futures::select::{Either, Either3, select, select3};
+use embassy_futures::select::{Either3, select3};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_time::{Duration, Instant, Timer};
 use moonblokz_radio_lib::{
-    MAX_NODE_COUNT,
-    MessageType, // <-- Add this import
-    RadioCommunicationManager,
-    RadioMessage,
-    RadioPacket,
-    ReceivedPacket,
-    ScoringMatrix,
+    MAX_NODE_COUNT, MessageType, RadioCommunicationManager, RadioMessage, RadioPacket, ReceivedPacket, ScoringMatrix,
     radio_device_simulator::{RadioInputQueue, RadioOutputQueue},
 };
-use serde::{Deserialize, de};
+use serde::Deserialize;
 use std::{collections::HashMap, time::Instant as StdInstant};
 use std::{collections::HashSet, fs};
 
 use crate::{
     NodeInfo, NodeUIState, UICommand, UICommandChannelReceiver, UIRefreshChannelSender, UIRefreshState,
     signal_calculations::{
-        LoraParameters, PathLossParameters, calculate_air_time, calculate_effective_distance, calculate_path_loss, calculate_receiving_limit_with_basic_noise,
-        calculate_rssi, calculate_snr_limit, calculate_tx_power_from_effective_distance, dbm_to_mw, get_cad_time, get_preamble_time, mw_to_dbm,
+        LoraParameters, PathLossParameters, calculate_air_time, calculate_effective_distance, calculate_rssi, calculate_snr_limit, dbm_to_mw, get_cad_time,
+        get_preamble_time, mw_to_dbm,
     },
+    time_driver,
 };
 
 const CAPTURE_THRESHOLD: f32 = 6.0;
@@ -42,6 +37,7 @@ type NodesOutputQueueSender = embassy_sync::channel::Sender<'static, CriticalSec
 struct Scene {
     path_loss_parameters: PathLossParameters,
     lora_parameters: LoraParameters,
+    radio_module_config: RadioModuleConfig,
     nodes: Vec<Node>,
     obstacles: Vec<Obstacle>,
 }
@@ -131,6 +127,16 @@ enum Obstacle {
         reduction: u32,
     },
 }
+#[derive(Deserialize, Clone)]
+struct RadioModuleConfig {
+    delay_between_tx_packets: u8,
+    delay_between_tx_messages: u8,
+    echo_request_minimal_interval: u32,
+    echo_messages_target_interval: u8,
+    echo_gathering_timeout: u8,
+    relay_position_delay: u8,
+    scoring_matrix: [u8; 5],
+}
 
 enum NodeOutputPayload {
     RadioTransfer(RadioPacket),
@@ -157,7 +163,7 @@ fn distance(a: &Point, b: &Point) -> f32 {
 }
 
 #[embassy_executor::task(pool_size = MAX_NODE_COUNT)]
-async fn node_task(spawner: Spawner, node_id: u32, out_tx: NodesOutputQueueSender, in_rx: NodeInputQueueReceiver) {
+async fn node_task(spawner: Spawner, radio_module_config: RadioModuleConfig, node_id: u32, out_tx: NodesOutputQueueSender, in_rx: NodeInputQueueReceiver) {
     let radio_output_queue: &'static mut RadioOutputQueue = Box::leak(Box::new(RadioOutputQueue::new()));
     let radio_input_queue: &'static mut RadioInputQueue = Box::leak(Box::new(RadioInputQueue::new()));
 
@@ -176,12 +182,12 @@ async fn node_task(spawner: Spawner, node_id: u32, out_tx: NodesOutputQueueSende
     };*/
 
     let radio_config = moonblokz_radio_lib::RadioConfiguration {
-        delay_between_tx_packets: 1,
-        delay_between_tx_messages: 10,
-        echo_request_minimal_interval: 100,
-        echo_messages_target_interval: 100,
-        echo_gathering_timeout: 2,
-        relay_position_delay: 10,
+        delay_between_tx_packets: radio_module_config.delay_between_tx_packets,
+        delay_between_tx_messages: radio_module_config.delay_between_tx_messages,
+        echo_request_minimal_interval: radio_module_config.echo_request_minimal_interval,
+        echo_messages_target_interval: radio_module_config.echo_messages_target_interval,
+        echo_gathering_timeout: radio_module_config.echo_gathering_timeout,
+        relay_position_delay: radio_module_config.relay_position_delay,
         scoring_matrix: ScoringMatrix::new_from_encoded(&[255u8, 243u8, 65u8, 82u8, 143u8]),
     };
 
@@ -295,7 +301,7 @@ pub(crate) async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshChann
 
     let result = serde_json::from_str::<Scene>(&data).context("Invalid JSON format");
 
-    let mut scene = match result {
+    let scene = match result {
         Ok(scene) => scene,
         Err(err) => {
             ui_refresh_tx.send(UIRefreshState::Alert(format!("Error parsing config file: {}", err))).await;
@@ -303,9 +309,7 @@ pub(crate) async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshChann
         }
     };
 
-    for node in scene.nodes.iter_mut() {
-        node.radio_strength = 18.0;
-    }
+    // Keep node radio_strength as defined in the scene configuration.
 
     ui_refresh_tx
         .send(UIRefreshState::NodesUpdated(
@@ -331,14 +335,22 @@ pub(crate) async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshChann
     // Build nodes and spawn a task per node that owns its manager
     for node in scene.nodes {
         let node_input_channel = Box::leak(Box::new(NodeInputQueue::new()));
-        let _ = spawner.spawn(node_task(spawner, node.node_id, nodes_output_channel.sender(), node_input_channel.receiver()));
+        let _ = spawner.spawn(node_task(
+            spawner,
+            scene.radio_module_config.clone(),
+            node.node_id,
+            nodes_output_channel.sender(),
+            node_input_channel.receiver(),
+        ));
         let mut new_node = node.clone();
         new_node.node_input_queue_sender = Some(node_input_channel.sender());
         nodes_map.insert(new_node.node_id, new_node);
     }
     let mut delay_warning_issued = false;
     let cad_time = get_cad_time(&scene.lora_parameters);
-    let preamble_time = get_preamble_time(&scene.lora_parameters);
+    let _preamble_time = get_preamble_time(&scene.lora_parameters);
+
+    let mut upcounter = 0;
 
     loop {
         let mut next_airtime_event = Instant::now() + Duration::from_secs(3600);
@@ -383,11 +395,12 @@ pub(crate) async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshChann
                         });
 
                         //add to our queue to handle tx,rx collisions
+                        let airtime_ms = (calculate_air_time(scene.lora_parameters.clone(), packet.length) * 1000.0) as u64;
                         node.airtime_waiting_packets.push(AirtimeWaitingPacket {
                             packet: packet.clone(),
                             sender_node_id: node_id,
                             start_time: Instant::now(),
-                            airtime: Duration::from_millis((calculate_air_time(scene.lora_parameters.clone(), packet.length) * 1000.0) as u64),
+                            airtime: Duration::from_millis(airtime_ms),
                             rssi: calculate_rssi(0.0, node.radio_strength, &scene.path_loss_parameters),
                             processed: true,
                         });
@@ -427,11 +440,12 @@ pub(crate) async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshChann
                             if let Some(target_node) = nodes_map.get_mut(&target_node_id) {
                                 let distance = distance(&node_position, &target_node.position);
                                 if distance < calculate_effective_distance(node_radio_strength as f32, &scene.lora_parameters, &scene.path_loss_parameters) {
+                                    let airtime_ms = (calculate_air_time(scene.lora_parameters.clone(), packet.length) * 1000.0) as u64;
                                     target_node.airtime_waiting_packets.push(AirtimeWaitingPacket {
                                         packet: packet.clone(),
                                         sender_node_id: node_id,
                                         start_time: Instant::now(),
-                                        airtime: Duration::from_millis((calculate_air_time(scene.lora_parameters.clone(), packet.length) * 1000.0) as u64),
+                                        airtime: Duration::from_millis(airtime_ms),
                                         rssi: calculate_rssi(distance as f32, node_radio_strength, &scene.path_loss_parameters),
                                         processed: false,
                                     });
@@ -494,6 +508,26 @@ pub(crate) async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshChann
                         delay_warning_issued = false;
                         let _ = ui_refresh_tx.try_send(UIRefreshState::SimulationDelayWarningChanged(0));
                     }
+                }
+
+                if time_delay < Duration::from_millis(4) {
+                    upcounter += 1;
+                    if upcounter > 10 {
+                        let mut percent = time_driver::get_ui_speed_percent();
+                        percent += 1;
+                        log::info!("Increasing UI speed to {}%", percent);
+                        //  time_driver::set_ui_speed_percent(percent);
+                        upcounter = 0;
+                    }
+                } else {
+                    upcounter = 0;
+                }
+
+                if time_delay > Duration::from_millis(8) {
+                    let mut percent = time_driver::get_ui_speed_percent();
+                    percent -= 1;
+                    log::info!("Decreasing UI speed to {}%", percent);
+                    //   time_driver::set_ui_speed_percent(percent);
                 }
 
                 for (_id, node) in nodes_map.iter_mut() {
