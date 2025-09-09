@@ -29,7 +29,6 @@ type NodeInputQueueSender = embassy_sync::channel::Sender<'static, CriticalSecti
 
 const NODES_OUTPUT_BUFFER_CAPACITY: usize = 10;
 type NodesOutputQueue = embassy_sync::channel::Channel<CriticalSectionRawMutex, NodeOutputMessage, NODES_OUTPUT_BUFFER_CAPACITY>;
-type NodesOutputQueueReceiver = embassy_sync::channel::Receiver<'static, CriticalSectionRawMutex, NodeOutputMessage, NODES_OUTPUT_BUFFER_CAPACITY>;
 type NodesOutputQueueSender = embassy_sync::channel::Sender<'static, CriticalSectionRawMutex, NodeOutputMessage, NODES_OUTPUT_BUFFER_CAPACITY>;
 
 /// Root structure representing the entire scene
@@ -88,32 +87,32 @@ struct Node {
 
 /// Simple 2D point
 #[derive(Debug, Deserialize, Clone)]
-pub(crate) struct Point {
-    pub(crate) x: u32,
-    pub(crate) y: u32,
+pub struct Point {
+    pub x: u32,
+    pub y: u32,
 }
 
 /// Rectangle position with two corners
-#[derive(Debug, Deserialize)]
-struct RectPos {
+#[derive(Debug, Deserialize, Clone)]
+pub struct RectPos {
     #[serde(rename = "top-left-position")]
-    top_left: Point,
+    pub top_left: Point,
     #[serde(rename = "bottom-right-position")]
-    bottom_right: Point,
+    pub bottom_right: Point,
 }
 
 /// Circle position defined by its center
-#[derive(Debug, Deserialize)]
-struct CirclePos {
+#[derive(Debug, Deserialize, Clone)]
+pub struct CirclePos {
     #[serde(rename = "center_position")]
-    center: Point,
-    radius: u32,
+    pub center: Point,
+    pub radius: u32,
 }
 
 /// Obstacles represented as tagged enum
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 #[serde(tag = "type")]
-enum Obstacle {
+pub(crate) enum Obstacle {
     #[serde(rename = "rectangle")]
     Rectangle {
         #[serde(flatten)]
@@ -160,6 +159,147 @@ fn distance(a: &Point, b: &Point) -> f32 {
     let dx = a.x as f32 - b.x as f32;
     let dy = a.y as f32 - b.y as f32;
     (dx * dx + dy * dy).sqrt()
+}
+
+fn is_intersect(point1: &Point, point2: &Point, obstacles: &Vec<Obstacle>) -> bool {
+    // Early out if degenerate segment
+    if point1.x == point2.x && point1.y == point2.y {
+        // Treat as a point: intersects if the point is inside any obstacle
+        for obs in obstacles {
+            match obs {
+                Obstacle::Rectangle { position, .. } => {
+                    if point_in_rect(point1, &position) {
+                        return true;
+                    }
+                }
+                Obstacle::Circle { position, .. } => {
+                    if point_in_circle(point1, &position) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    for obs in obstacles {
+        match obs {
+            Obstacle::Rectangle { position, .. } => {
+                if segment_intersects_rect(point1, point2, &position) {
+                    return true;
+                }
+            }
+            Obstacle::Circle { position, .. } => {
+                if segment_intersects_circle(point1, point2, &position) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+// ---------- Geometry helpers ----------
+
+fn rect_bounds(rect: &RectPos) -> (u32, u32, u32, u32) {
+    let left = rect.top_left.x.min(rect.bottom_right.x);
+    let right = rect.top_left.x.max(rect.bottom_right.x);
+    let top = rect.top_left.y.min(rect.bottom_right.y);
+    let bottom = rect.top_left.y.max(rect.bottom_right.y);
+    (left, right, top, bottom)
+}
+
+fn point_in_rect(p: &Point, rect: &RectPos) -> bool {
+    let (left, right, top, bottom) = rect_bounds(rect);
+    p.x >= left && p.x <= right && p.y >= top && p.y <= bottom
+}
+
+fn point_in_circle(p: &Point, circle: &CirclePos) -> bool {
+    let dx = p.x as i64 - circle.center.x as i64;
+    let dy = p.y as i64 - circle.center.y as i64;
+    let r2 = (circle.radius as i64) * (circle.radius as i64);
+    dx * dx + dy * dy <= r2
+}
+
+fn segment_intersects_rect(p1: &Point, p2: &Point, rect: &RectPos) -> bool {
+    // Inside check
+    if point_in_rect(p1, rect) || point_in_rect(p2, rect) {
+        return true;
+    }
+
+    let (left, right, top, bottom) = rect_bounds(rect);
+    let lt = Point { x: left, y: top };
+    let rt = Point { x: right, y: top };
+    let rb = Point { x: right, y: bottom };
+    let lb = Point { x: left, y: bottom };
+
+    // Check segment against each rectangle edge
+    segments_intersect(p1, p2, &lt, &rt) || segments_intersect(p1, p2, &rt, &rb) || segments_intersect(p1, p2, &rb, &lb) || segments_intersect(p1, p2, &lb, &lt)
+}
+
+fn segment_intersects_circle(p1: &Point, p2: &Point, circle: &CirclePos) -> bool {
+    // Distance from circle center to segment <= radius
+    let x1 = p1.x as f32;
+    let y1 = p1.y as f32;
+    let x2 = p2.x as f32;
+    let y2 = p2.y as f32;
+    let cx = circle.center.x as f32;
+    let cy = circle.center.y as f32;
+    let r = circle.radius as f32;
+
+    let dx = x2 - x1;
+    let dy = y2 - y1;
+    if dx == 0.0 && dy == 0.0 {
+        let ddx = x1 - cx;
+        let ddy = y1 - cy;
+        return ddx * ddx + ddy * ddy <= r * r;
+    }
+    let t = ((cx - x1) * dx + (cy - y1) * dy) / (dx * dx + dy * dy);
+    let t_clamped = t.max(0.0).min(1.0);
+    let closest_x = x1 + t_clamped * dx;
+    let closest_y = y1 + t_clamped * dy;
+    let ddx = closest_x - cx;
+    let ddy = closest_y - cy;
+    ddx * ddx + ddy * ddy <= r * r
+}
+
+fn orientation(a: &Point, b: &Point, c: &Point) -> i32 {
+    let ax = a.x as i64;
+    let ay = a.y as i64;
+    let bx = b.x as i64;
+    let by = b.y as i64;
+    let cx = c.x as i64;
+    let cy = c.y as i64;
+    let val = (by - ay) * (cx - bx) - (bx - ax) * (cy - by);
+    if val > 0 {
+        1
+    } else if val < 0 {
+        -1
+    } else {
+        0
+    }
+}
+
+fn on_segment(a: &Point, b: &Point, c: &Point) -> bool {
+    // Is b on segment a-c (assuming collinear)
+    let min_x = a.x.min(c.x);
+    let max_x = a.x.max(c.x);
+    let min_y = a.y.min(c.y);
+    let max_y = a.y.max(c.y);
+    b.x >= min_x && b.x <= max_x && b.y >= min_y && b.y <= max_y
+}
+
+fn segments_intersect(p1: &Point, q1: &Point, p2: &Point, q2: &Point) -> bool {
+    let o1 = orientation(p1, q1, p2);
+    let o2 = orientation(p1, q1, q2);
+    let o3 = orientation(p2, q2, p1);
+    let o4 = orientation(p2, q2, q1);
+
+    if o1 != o2 && o3 != o4 {
+        return true; // Proper intersection
+    }
+    // Special cases: collinear and overlapping endpoints
+    (o1 == 0 && on_segment(p1, p2, q1)) || (o2 == 0 && on_segment(p1, q2, q1)) || (o3 == 0 && on_segment(p2, p1, q2)) || (o4 == 0 && on_segment(p2, q1, q2))
 }
 
 #[embassy_executor::task(pool_size = MAX_NODE_COUNT)]
@@ -328,6 +468,9 @@ pub(crate) async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshChann
         ))
         .await;
 
+    // Publish obstacles to the UI
+    ui_refresh_tx.send(UIRefreshState::ObstaclesUpdated(scene.obstacles.clone())).await;
+
     let nodes_output_channel = Box::leak(Box::new(NodesOutputQueue::new()));
 
     let mut nodes_map: HashMap<u32, Node> = HashMap::new();
@@ -351,6 +494,13 @@ pub(crate) async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshChann
     let _preamble_time = get_preamble_time(&scene.lora_parameters);
 
     let mut upcounter = 0;
+    let mut auto_speed_enabled = false;
+    // Cooldown to avoid changing speed too frequently
+    let mut last_speed_change_at = Instant::now();
+    let speed_change_cooldown = Duration::from_millis(30);
+    // Auto-speed guardrails to avoid stalling the simulation
+    let auto_speed_min_percent: u32 = 80; // don't go below 80%
+    let auto_speed_max_percent: u32 = 400; // don't exceed UI slider's max
 
     loop {
         let mut next_airtime_event = Instant::now() + Duration::from_secs(3600);
@@ -370,14 +520,16 @@ pub(crate) async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshChann
             }
         }
 
+        // Keep the loop responsive even when no events are near by ticking every 10 ms
+        let tick_deadline = Instant::now() + Duration::from_millis(10);
+        let wait_deadline = if next_airtime_event < tick_deadline {
+            next_airtime_event
+        } else {
+            tick_deadline
+        };
+
         // Await forwarded messages from any node or UI commands
-        match select3(
-            nodes_output_channel.receiver().receive(),
-            ui_command_rx.receive(),
-            Timer::at(next_airtime_event),
-        )
-        .await
-        {
+        match select3(nodes_output_channel.receiver().receive(), ui_command_rx.receive(), Timer::at(wait_deadline)).await {
             Either3::First(NodeOutputMessage { node_id, payload }) => match payload {
                 NodeOutputPayload::RadioTransfer(packet) => {
                     let node_position;
@@ -432,7 +584,9 @@ pub(crate) async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshChann
                         for (_other_node_id, other_node) in nodes_map.iter().filter_map(|(id, node)| if *id != node_id { Some((id, node)) } else { None }) {
                             let distance = distance(&node_position, &other_node.position);
                             if distance < calculate_effective_distance(node_radio_strength as f32, &scene.lora_parameters, &scene.path_loss_parameters) {
-                                target_node_ids.push(other_node.node_id);
+                                if !is_intersect(&node_position, &other_node.position, &scene.obstacles) {
+                                    target_node_ids.push(other_node.node_id);
+                                }
                             }
                         }
 
@@ -493,175 +647,205 @@ pub(crate) async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshChann
                         }
                     }
                 }
+                UICommand::SetAutoSpeed(enabled) => {
+                    auto_speed_enabled = enabled;
+                }
             },
             Either3::Third(_) => {
-                //check time delay
-                let time_delay = Instant::now().duration_since(next_airtime_event);
-                if time_delay > Duration::from_millis(10) {
-                    let delay_ms = time_delay.as_millis() as u32;
-                    if !delay_warning_issued {
-                        delay_warning_issued = true;
-                        let _ = ui_refresh_tx.try_send(UIRefreshState::SimulationDelayWarningChanged(delay_ms));
-                    }
-                } else {
-                    if delay_warning_issued {
+                // Determine whether the real event was reached or this was just the periodic tick
+                let now = Instant::now();
+                let event_reached = now >= next_airtime_event;
+
+                let mut delay_for_autospeed: Option<Duration> = None;
+                if event_reached {
+                    // Check and report processing delay relative to the scheduled event
+                    let time_delay = now.duration_since(next_airtime_event);
+                    log::debug!("Timer::at fired; next_airtime_event reached with delay = {} ms", time_delay.as_millis());
+                    delay_for_autospeed = Some(time_delay);
+                    if time_delay > Duration::from_millis(10) {
+                        let delay_ms = time_delay.as_millis() as u32;
+                        if !delay_warning_issued {
+                            delay_warning_issued = true;
+                            let _ = ui_refresh_tx.try_send(UIRefreshState::SimulationDelayWarningChanged(delay_ms));
+                        }
+                    } else if delay_warning_issued {
                         delay_warning_issued = false;
                         let _ = ui_refresh_tx.try_send(UIRefreshState::SimulationDelayWarningChanged(0));
                     }
                 }
 
-                if time_delay < Duration::from_millis(4) {
-                    upcounter += 1;
-                    if upcounter > 10 {
-                        let mut percent = time_driver::get_ui_speed_percent();
-                        percent += 1;
-                        log::info!("Increasing UI speed to {}%", percent);
-                        //  time_driver::set_ui_speed_percent(percent);
-                        upcounter = 0;
-                    }
-                } else {
-                    upcounter = 0;
-                }
+                if auto_speed_enabled {
+                    if let Some(time_delay) = delay_for_autospeed {
+                        // Increase speed slowly when we have headroom
+                        if time_delay < Duration::from_millis(4) {
+                            upcounter += 1;
+                            if upcounter > 10 {
+                                let now = Instant::now();
+                                if now - last_speed_change_at >= speed_change_cooldown {
+                                    let mut percent = time_driver::get_simulation_speed_percent();
+                                    if percent < auto_speed_max_percent {
+                                        percent += 1;
+                                        log::info!("Increasing UI speed to {}%", percent);
+                                        time_driver::set_simulation_speed_percent(percent);
+                                        last_speed_change_at = now;
+                                    }
+                                }
+                                upcounter = 0;
+                            }
+                        } else {
+                            upcounter = 0;
+                        }
 
-                if time_delay > Duration::from_millis(8) {
-                    let mut percent = time_driver::get_ui_speed_percent();
-                    percent -= 1;
-                    log::info!("Decreasing UI speed to {}%", percent);
-                    //   time_driver::set_ui_speed_percent(percent);
-                }
-
-                for (_id, node) in nodes_map.iter_mut() {
-                    let now = Instant::now();
-                    for cad_waiting_item in node.cad_waiting_list.iter_mut() {
-                        if cad_waiting_item.end_time < now {
-                            let mut activity = false;
-                            for packet in &node.airtime_waiting_packets {
-                                if packet.start_time < cad_waiting_item.end_time && packet.start_time + packet.airtime > cad_waiting_item.start_time {
-                                    activity = true;
-                                    break;
+                        // Decrease speed only within safe bounds to avoid near-zero speeds
+                        if time_delay > Duration::from_millis(8) {
+                            let now = Instant::now();
+                            if now - last_speed_change_at >= speed_change_cooldown {
+                                let mut percent = time_driver::get_simulation_speed_percent();
+                                if percent > auto_speed_min_percent {
+                                    percent -= 1;
+                                    log::info!("Decreasing UI speed to {}%", percent);
+                                    time_driver::set_simulation_speed_percent(percent);
+                                    last_speed_change_at = now;
                                 }
                             }
-
-                            let _ = node.node_input_queue_sender.as_ref().unwrap().try_send(NodeInputMessage::CADResponse(activity));
                         }
                     }
+                }
+                // Only run event processing when the actual event deadline was reached
+                if event_reached {
+                    for (_id, node) in nodes_map.iter_mut() {
+                        let now = Instant::now();
+                        for cad_waiting_item in node.cad_waiting_list.iter_mut() {
+                            if cad_waiting_item.end_time < now {
+                                let mut activity = false;
+                                for packet in &node.airtime_waiting_packets {
+                                    if packet.start_time < cad_waiting_item.end_time && packet.start_time + packet.airtime > cad_waiting_item.start_time {
+                                        activity = true;
+                                        break;
+                                    }
+                                }
 
-                    //delete all outdated CAD items
-                    node.cad_waiting_list.retain(|item| item.end_time >= now);
-
-                    //clean outdated items from airtime_waiting_packets
-                    //get the earliest start time of unprocessed items
-                    let mut earliest_start_time = Instant::now();
-                    for packet in &node.airtime_waiting_packets {
-                        if !packet.processed {
-                            if packet.start_time < earliest_start_time {
-                                earliest_start_time = packet.start_time;
+                                let _ = node.node_input_queue_sender.as_ref().unwrap().try_send(NodeInputMessage::CADResponse(activity));
                             }
                         }
-                    }
 
-                    //delete all processed packets where end_time<earliest_start_time
-                    node.airtime_waiting_packets
-                        .retain(|packet| !packet.processed || packet.start_time + packet.airtime >= earliest_start_time);
+                        //delete all outdated CAD items
+                        node.cad_waiting_list.retain(|item| item.end_time >= now);
 
-                    //get the index, start_time,end_time of the next packet to process
-                    let mut packet_to_process_index: Option<usize> = None;
-                    let mut packet_to_process_start_time = Instant::now();
-                    let mut packet_to_process_end_time = Instant::now();
-                    let mut packet_to_process_rssi = 0.0;
-
-                    for (i, packet) in node.airtime_waiting_packets.iter().enumerate() {
-                        if !packet.processed {
-                            packet_to_process_index = Some(i);
-                            packet_to_process_start_time = packet.start_time;
-                            packet_to_process_end_time = packet.start_time + packet.airtime;
-                            packet_to_process_rssi = packet.rssi;
-                            break;
+                        //clean outdated items from airtime_waiting_packets
+                        //get the earliest start time of unprocessed items
+                        let mut earliest_start_time = Instant::now();
+                        for packet in &node.airtime_waiting_packets {
+                            if !packet.processed {
+                                if packet.start_time < earliest_start_time {
+                                    earliest_start_time = packet.start_time;
+                                }
+                            }
                         }
-                    }
 
-                    let mut destructive_collision = false;
-                    //calculate total noise
-                    if let Some(packet_to_process_index) = packet_to_process_index {
-                        node.airtime_waiting_packets[packet_to_process_index].processed = true;
-                        let mut sum_noise = dbm_to_mw(scene.path_loss_parameters.noise_floor);
-                        let mut collision = false;
-                        let snr_limit = calculate_snr_limit(&scene.lora_parameters);
+                        //delete all processed packets where end_time<earliest_start_time
+                        node.airtime_waiting_packets
+                            .retain(|packet| !packet.processed || packet.start_time + packet.airtime >= earliest_start_time);
+
+                        //get the index, start_time,end_time of the next packet to process
+                        let mut packet_to_process_index: Option<usize> = None;
+                        let mut packet_to_process_start_time = Instant::now();
+                        let mut packet_to_process_end_time = Instant::now();
+                        let mut packet_to_process_rssi = 0.0;
+
                         for (i, packet) in node.airtime_waiting_packets.iter().enumerate() {
-                            if i != packet_to_process_index {
-                                if packet.start_time < packet_to_process_end_time && packet.start_time + packet.airtime > packet_to_process_start_time {
-                                    if packet.start_time < packet_to_process_start_time && packet.rssi > snr_limit {
-                                        destructive_collision = true;
+                            if !packet.processed {
+                                packet_to_process_index = Some(i);
+                                packet_to_process_start_time = packet.start_time;
+                                packet_to_process_end_time = packet.start_time + packet.airtime;
+                                packet_to_process_rssi = packet.rssi;
+                                break;
+                            }
+                        }
+
+                        let mut destructive_collision = false;
+                        //calculate total noise
+                        if let Some(packet_to_process_index) = packet_to_process_index {
+                            node.airtime_waiting_packets[packet_to_process_index].processed = true;
+                            let mut sum_noise = dbm_to_mw(scene.path_loss_parameters.noise_floor);
+                            let mut collision = false;
+                            let snr_limit = calculate_snr_limit(&scene.lora_parameters);
+                            for (i, packet) in node.airtime_waiting_packets.iter().enumerate() {
+                                if i != packet_to_process_index {
+                                    if packet.start_time < packet_to_process_end_time && packet.start_time + packet.airtime > packet_to_process_start_time {
+                                        if packet.start_time < packet_to_process_start_time && packet.rssi > snr_limit {
+                                            destructive_collision = true;
+                                        }
+                                        if packet.start_time >= packet_to_process_start_time && packet_to_process_rssi - packet.rssi > CAPTURE_THRESHOLD {
+                                            destructive_collision = true;
+                                        }
+                                        sum_noise += dbm_to_mw(packet.rssi);
+                                        collision = true;
                                     }
-                                    if packet.start_time >= packet_to_process_start_time && packet_to_process_rssi - packet.rssi > CAPTURE_THRESHOLD {
-                                        destructive_collision = true;
-                                    }
-                                    sum_noise += dbm_to_mw(packet.rssi);
-                                    collision = true;
                                 }
                             }
-                        }
 
-                        let total_noise = mw_to_dbm(sum_noise);
+                            let total_noise = mw_to_dbm(sum_noise);
 
-                        let sinr = node.airtime_waiting_packets[packet_to_process_index].rssi - total_noise;
+                            let sinr = node.airtime_waiting_packets[packet_to_process_index].rssi - total_noise;
 
-                        let link_quality =
-                            moonblokz_radio_lib::calculate_link_quality(node.airtime_waiting_packets[packet_to_process_index].rssi as i16, sinr as i16);
+                            let link_quality =
+                                moonblokz_radio_lib::calculate_link_quality(node.airtime_waiting_packets[packet_to_process_index].rssi as i16, sinr as i16);
 
-                        if sinr >= snr_limit && !destructive_collision {
-                            if let Some(sender) = &node.node_input_queue_sender {
-                                let _ = sender
-                                    .send(NodeInputMessage::RadioTransfer(ReceivedPacket {
-                                        packet: node.airtime_waiting_packets[packet_to_process_index].packet.clone(),
-                                        link_quality,
-                                    }))
-                                    .await;
-                            } else {
-                                log::warn!("Node {} does not have an input queue sender", node.node_id);
+                            if sinr >= snr_limit && !destructive_collision {
+                                if let Some(sender) = &node.node_input_queue_sender {
+                                    let _ = sender
+                                        .send(NodeInputMessage::RadioTransfer(ReceivedPacket {
+                                            packet: node.airtime_waiting_packets[packet_to_process_index].packet.clone(),
+                                            link_quality,
+                                        }))
+                                        .await;
+                                } else {
+                                    log::warn!("Node {} does not have an input queue sender", node.node_id);
+                                }
+                                total_received_packets += 1;
+
+                                node.node_messages.push(NodeMessage {
+                                    timestamp: StdInstant::now(),
+                                    message_type: node.airtime_waiting_packets[packet_to_process_index].packet.message_type(),
+                                    sender_node: node.airtime_waiting_packets[packet_to_process_index].sender_node_id,
+                                    packet_size: node.airtime_waiting_packets[packet_to_process_index].packet.length,
+                                    packet_index: node.airtime_waiting_packets[packet_to_process_index].packet.packet_index(),
+                                    packet_count: node.airtime_waiting_packets[packet_to_process_index].packet.total_packet_count(),
+                                    collision: false,
+                                    link_quality,
+                                });
+
+                                ui_refresh_tx
+                                    .try_send(UIRefreshState::RadioMessagesCountUpdated(
+                                        total_sent_packets,
+                                        total_received_packets,
+                                        total_collision,
+                                    ))
+                                    .ok();
+                            } else if collision {
+                                total_collision += 1;
+                                node.node_messages.push(NodeMessage {
+                                    timestamp: StdInstant::now(),
+                                    message_type: node.airtime_waiting_packets[packet_to_process_index].packet.message_type(),
+                                    sender_node: node.airtime_waiting_packets[packet_to_process_index].sender_node_id,
+                                    packet_size: node.airtime_waiting_packets[packet_to_process_index].packet.length,
+                                    packet_index: node.airtime_waiting_packets[packet_to_process_index].packet.packet_index(),
+                                    packet_count: node.airtime_waiting_packets[packet_to_process_index].packet.total_packet_count(),
+                                    collision: true,
+                                    link_quality,
+                                });
+                                ui_refresh_tx
+                                    .try_send(UIRefreshState::RadioMessagesCountUpdated(
+                                        total_sent_packets,
+                                        total_received_packets,
+                                        total_collision,
+                                    ))
+                                    .ok();
                             }
-                            total_received_packets += 1;
-
-                            node.node_messages.push(NodeMessage {
-                                timestamp: StdInstant::now(),
-                                message_type: node.airtime_waiting_packets[packet_to_process_index].packet.message_type(),
-                                sender_node: node.airtime_waiting_packets[packet_to_process_index].sender_node_id,
-                                packet_size: node.airtime_waiting_packets[packet_to_process_index].packet.length,
-                                packet_index: node.airtime_waiting_packets[packet_to_process_index].packet.packet_index(),
-                                packet_count: node.airtime_waiting_packets[packet_to_process_index].packet.total_packet_count(),
-                                collision: false,
-                                link_quality,
-                            });
-
-                            ui_refresh_tx
-                                .try_send(UIRefreshState::RadioMessagesCountUpdated(
-                                    total_sent_packets,
-                                    total_received_packets,
-                                    total_collision,
-                                ))
-                                .ok();
-                        } else if collision {
-                            total_collision += 1;
-                            node.node_messages.push(NodeMessage {
-                                timestamp: StdInstant::now(),
-                                message_type: node.airtime_waiting_packets[packet_to_process_index].packet.message_type(),
-                                sender_node: node.airtime_waiting_packets[packet_to_process_index].sender_node_id,
-                                packet_size: node.airtime_waiting_packets[packet_to_process_index].packet.length,
-                                packet_index: node.airtime_waiting_packets[packet_to_process_index].packet.packet_index(),
-                                packet_count: node.airtime_waiting_packets[packet_to_process_index].packet.total_packet_count(),
-                                collision: true,
-                                link_quality,
-                            });
-                            ui_refresh_tx
-                                .try_send(UIRefreshState::RadioMessagesCountUpdated(
-                                    total_sent_packets,
-                                    total_received_packets,
-                                    total_collision,
-                                ))
-                                .ok();
                         }
                     }
-                }
+                } // event_reached
             }
         }
     }

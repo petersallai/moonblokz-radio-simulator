@@ -10,12 +10,12 @@ use serde::{Deserialize, Serialize};
 use std::cmp::max;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::hash::Hash;
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
 use crate::network::NodeMessage;
+use crate::network::Obstacle;
 use crate::network::Point;
 
 mod network;
@@ -44,8 +44,10 @@ pub struct NodeInfo {
 #[derive(Debug)]
 enum UIRefreshState {
     Alert(String),
+    #[allow(dead_code)]
     NodeUpdated(NodeUIState),
     NodesUpdated(Vec<NodeUIState>),
+    ObstaclesUpdated(Vec<Obstacle>),
     NodeSentRadioMessage(u32, u8, u32), // node ID, message type, and effective distance
     NodeInfo(NodeInfo),
     RadioMessagesCountUpdated(u64, u64, u64), // total sent, total received, total collisions
@@ -63,6 +65,7 @@ enum UICommand {
     LoadFile(String),
     RequestNodeInfo(u32),
     StartMeasurement(u32, u32),
+    SetAutoSpeed(bool),
 }
 
 struct AppState {
@@ -72,6 +75,7 @@ struct AppState {
     // Map state
     selected: Option<usize>,
     nodes: Vec<NodeUIState>,
+    obstacles: Vec<Obstacle>,
     node_radio_transfer_indicators: HashMap<u32, (Instant, u8, u32)>,
     node_info: Option<NodeInfo>,
     start_time: Instant,
@@ -89,6 +93,8 @@ struct AppState {
     echo_result_count: u32,
     // Simulation speed control (percentage)
     speed_percent: u32,
+    // Auto speed control (network-side scaler)
+    auto_speed_enabled: bool,
     measurement_50_time: u64,
     measurement_90_time: u64,
     measurement_100_time: u64,
@@ -110,6 +116,7 @@ impl AppState {
             ui_command_tx: tx,
             selected: None,
             nodes: Vec::new(),
+            obstacles: Vec::new(),
             node_radio_transfer_indicators: HashMap::new(),
             node_info: None,
             start_time: Instant::now(),
@@ -124,7 +131,8 @@ impl AppState {
             scene_file_selected: false,
             last_open_dir: persisted.last_open_dir,
             echo_result_count: 0,
-            speed_percent: crate::time_driver::get_ui_speed_percent(),
+            speed_percent: crate::time_driver::get_simulation_speed_percent(),
+            auto_speed_enabled: false,
             measurement_50_time: 0,
             measurement_90_time: 0,
             measurement_100_time: 0,
@@ -197,13 +205,14 @@ impl eframe::App for AppState {
                 UIRefreshState::NodesUpdated(nodes) => {
                     self.nodes = nodes;
                 }
+                UIRefreshState::ObstaclesUpdated(obstacles) => {
+                    self.obstacles = obstacles;
+                }
                 UIRefreshState::NodeSentRadioMessage(node_id, message_type, distance) => {
                     self.node_radio_transfer_indicators
                         .insert(node_id, (Instant::now() + NODE_RADIO_TRANSFER_INDICATOR_DURATION, message_type, distance));
                     if message_type == MessageType::EchoResult as u8 {
                         self.echo_result_count += 1;
-
-                        info!("Received {} echo results so far", self.echo_result_count);
                     }
                 }
                 UIRefreshState::NodeInfo(node_info) => {
@@ -279,13 +288,17 @@ impl eframe::App for AppState {
                         let sim_secs = embassy_time::Instant::now().as_secs();
                         let sim_time_str = format!("{:<6}", sim_secs); // fixed 6 chars, left-aligned (e.g., "42    ")
                         ui.label(egui::RichText::new(sim_time_str).monospace().strong());
-                        ui.label(" Total TX: ");
+                        ui.label("Total TX: ");
                         ui.label(egui::RichText::new(self.total_sent_packets.to_string()).strong());
                     });
 
+                    let nodes_count_str = format!("{:<7}", self.nodes.len()); // fixed 7 chars, left-aligned (e.g., "42    ")
+
                     ui.horizontal(|ui| {
                         ui.label("Nodes:");
-                        ui.label(egui::RichText::new(self.nodes.len().to_string()).strong());
+                        ui.label(egui::RichText::new(nodes_count_str).monospace().strong());
+                        ui.label("  Echo results: ");
+                        ui.label(egui::RichText::new(self.echo_result_count.to_string()).strong());
                     });
                     ui.horizontal(|ui| {
                         ui.label("Throughput(TX):");
@@ -313,11 +326,7 @@ impl eframe::App for AppState {
                         "-".into()
                     };
 
-                    let total_nodes_accessed_string = if self.measurement_identifier > 0 {
-                        format!("{}", self.reached_nodes.len())
-                    } else {
-                        "-".into()
-                    };
+                    // Note: total nodes accessed count is available from reached_nodes.len() when needed
 
                     let distribution_percentage = if self.nodes.len() > 0 && self.measurement_identifier > 0 {
                         (self.reached_nodes.len() as f64 / self.nodes.len() as f64) * 100.0
@@ -395,13 +404,16 @@ impl eframe::App for AppState {
                     ui.horizontal(|ui| {
                         ui.label("Speed:");
                         let mut speed = self.speed_percent as f64;
-                        if ui.add(egui::Slider::new(&mut speed, 10.0..=400.0).suffix("%")).changed() {
+                        // Keep UI slider in sync with autoscaler bounds
+                        if ui.add(egui::Slider::new(&mut speed, 80.0..=400.0).suffix("%")).changed() {
                             self.speed_percent = speed.round() as u32;
-                            crate::time_driver::set_ui_speed_percent(self.speed_percent);
+                            crate::time_driver::set_simulation_speed_percent(self.speed_percent);
                         }
                     });
-                    if ui.button("Auto").clicked() {
-                        debug!("Auto clicked");
+                    let mut auto = self.auto_speed_enabled;
+                    if ui.checkbox(&mut auto, "Auto speed").changed() {
+                        self.auto_speed_enabled = auto;
+                        let _ = self.ui_command_tx.try_send(UICommand::SetAutoSpeed(self.auto_speed_enabled));
                     }
                     if ui.button("Reset").clicked() {
                         debug!("Reset clicked");
@@ -682,6 +694,42 @@ impl eframe::App for AppState {
                 painter.line_segment([egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)], grid_stroke);
             }
 
+            // Draw obstacles before nodes so nodes appear on top
+            let obstacle_fill = Color32::from_rgba_unmultiplied(255, 255, 255, 255);
+            let obstacle_stroke = egui::Stroke::new(1.5, Color32::from_rgb(255, 255, 255));
+            for obs in &self.obstacles {
+                match obs {
+                    Obstacle::Rectangle { position, .. } => {
+                        // Compute bounds from corners in world units
+                        let l = position.top_left.x.min(position.bottom_right.x);
+                        let r = position.top_left.x.max(position.bottom_right.x);
+                        let t = position.top_left.y.min(position.bottom_right.y);
+                        let b = position.top_left.y.max(position.bottom_right.y);
+
+                        // Map world 0..10000 to rect coordinates
+                        let left = egui::lerp(rect.left()..=rect.right(), l as f32 / 10000.0);
+                        let right = egui::lerp(rect.left()..=rect.right(), r as f32 / 10000.0);
+                        let top = egui::lerp(rect.top()..=rect.bottom(), t as f32 / 10000.0);
+                        let bottom = egui::lerp(rect.top()..=rect.bottom(), b as f32 / 10000.0);
+                        let rect_px = egui::Rect::from_min_max(egui::pos2(left.min(right), top.min(bottom)), egui::pos2(left.max(right), top.max(bottom)));
+                        painter.rect_filled(rect_px, 0.0, obstacle_fill);
+                        painter.rect_stroke(rect_px, 0.0, obstacle_stroke);
+                    }
+                    Obstacle::Circle { position, .. } => {
+                        let cx = egui::lerp(rect.left()..=rect.right(), position.center.x as f32 / 10000.0);
+                        let cy = egui::lerp(rect.top()..=rect.bottom(), position.center.y as f32 / 10000.0);
+                        // Uniform scale for radius: take min scale to keep circle round in non-square rects
+                        let scale_x = rect.width() / 10000.0;
+                        let scale_y = rect.height() / 10000.0;
+                        let units_to_pixels = scale_x.min(scale_y);
+                        let r = position.radius as f32 * units_to_pixels;
+                        let center_px = egui::pos2(cx, cy);
+                        painter.circle_filled(center_px, r, obstacle_fill);
+                        painter.circle_stroke(center_px, r, obstacle_stroke);
+                    }
+                }
+            }
+
             // Draw points scaled into rect
             let radius = 4.0;
             for (i, p) in self.nodes.iter().enumerate() {
@@ -751,6 +799,7 @@ impl eframe::App for AppState {
                     }
                 }
             }
+            // Draw obstacles
         });
     }
 }

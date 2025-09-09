@@ -824,5 +824,14 @@
       "radio_strength": 2.2712402
     }
   ],
-  "obstacles": []
+    "obstacles": [
+    {
+      "type": "rectangle",
+      "top-left-position": { "x": 5380, "y": 5000 },
+      "bottom-right-position": { "x": 5430, "y": 9000 },
+      "reduction": 15
+    }
+
+  ]
+
 }
