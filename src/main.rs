@@ -53,6 +53,7 @@ enum UIRefreshState {
     RadioMessagesCountUpdated(u64, u64, u64), // total sent, total received, total collisions
     SimulationDelayWarningChanged(u32),
     NodeReachedInMeasurement(u32, u32), // node ID and measurement ID
+    SimulationSpeedChanged(u32),        // new speed percent
 }
 #[derive(Debug)]
 struct NodeUIState {
@@ -78,7 +79,7 @@ struct AppState {
     obstacles: Vec<Obstacle>,
     node_radio_transfer_indicators: HashMap<u32, (Instant, u8, u32)>,
     node_info: Option<NodeInfo>,
-    start_time: Instant,
+    start_time: embassy_time::Instant,
     last_node_info_update: Instant,
     total_sent_packets: u64,
     total_received_packets: u64,
@@ -86,7 +87,7 @@ struct AppState {
     simulation_delay: u32,
     measurement_identifier: u32,
     reached_nodes: HashSet<u32>,
-    measurement_start_time: Instant,
+    measurement_start_time: embassy_time::Instant,
     scene_file_selected: bool,
     // Persistence: last directory used for scene file chooser
     last_open_dir: Option<String>,
@@ -119,7 +120,7 @@ impl AppState {
             obstacles: Vec::new(),
             node_radio_transfer_indicators: HashMap::new(),
             node_info: None,
-            start_time: Instant::now(),
+            start_time: embassy_time::Instant::now(),
             last_node_info_update: Instant::now(),
             total_sent_packets: 0,
             total_received_packets: 0,
@@ -127,7 +128,7 @@ impl AppState {
             simulation_delay: 0,
             measurement_identifier: 0,
             reached_nodes: HashSet::new(),
-            measurement_start_time: Instant::now(),
+            measurement_start_time: embassy_time::Instant::now(),
             scene_file_selected: false,
             last_open_dir: persisted.last_open_dir,
             echo_result_count: 0,
@@ -231,6 +232,9 @@ impl eframe::App for AppState {
                         self.reached_nodes.insert(node_id);
                     }
                 }
+                UIRefreshState::SimulationSpeedChanged(new_speed) => {
+                    self.speed_percent = new_speed;
+                }
             }
         }
 
@@ -258,14 +262,14 @@ impl eframe::App for AppState {
 
         // Top: system metrics (fixed 200 px height) arranged into 3 vertical stacks
         egui::TopBottomPanel::top("top_metrics").exact_height(150.0).show(ctx, |ui| {
-            let throughput_tx = if self.start_time.elapsed().as_secs_f64() > 0.0 {
-                ((self.total_sent_packets as f64 / self.start_time.elapsed().as_secs_f64()) * 60.0) as u64
+            let throughput_tx = if self.start_time.elapsed().as_secs() > 0 {
+                ((self.total_sent_packets as f64 / self.start_time.elapsed().as_secs() as f64) * 60.0) as u64
             } else {
                 0
             };
 
-            let throughput_rx = if self.start_time.elapsed().as_secs_f64() > 0.0 {
-                ((self.total_received_packets as f64 / self.start_time.elapsed().as_secs_f64()) * 60.0) as u64
+            let throughput_rx = if self.start_time.elapsed().as_secs() > 0 {
+                ((self.total_received_packets as f64 / self.start_time.elapsed().as_secs() as f64) * 60.0) as u64
             } else {
                 0
             };
@@ -405,7 +409,7 @@ impl eframe::App for AppState {
                         ui.label("Speed:");
                         let mut speed = self.speed_percent as f64;
                         // Keep UI slider in sync with autoscaler bounds
-                        if ui.add(egui::Slider::new(&mut speed, 80.0..=400.0).suffix("%")).changed() {
+                        if ui.add(egui::Slider::new(&mut speed, 20.0..=1000.0).suffix("%")).changed() {
                             self.speed_percent = speed.round() as u32;
                             crate::time_driver::set_simulation_speed_percent(self.speed_percent);
                         }
@@ -416,7 +420,8 @@ impl eframe::App for AppState {
                         let _ = self.ui_command_tx.try_send(UICommand::SetAutoSpeed(self.auto_speed_enabled));
                     }
                     if ui.button("Reset").clicked() {
-                        debug!("Reset clicked");
+                        self.speed_percent = 100;
+                        crate::time_driver::set_simulation_speed_percent(self.speed_percent);
                     }
                     if self.simulation_delay > 10 {
                         ui.separator();
@@ -502,7 +507,7 @@ impl eframe::App for AppState {
                             if ui.add_sized([button_w, button_h], egui::Button::new(measurement_button_title)).clicked() {
                                 if self.measurement_identifier == 0 {
                                     self.measurement_identifier = max(rand::random::<u32>(), 1);
-                                    self.measurement_start_time = Instant::now();
+                                    self.measurement_start_time = embassy_time::Instant::now();
                                     let _ = self.ui_command_tx.try_send(UICommand::StartMeasurement(p.node_id, self.measurement_identifier));
                                     self.reached_nodes.clear();
                                     self.reached_nodes.insert(p.node_id);

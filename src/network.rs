@@ -43,7 +43,7 @@ struct Scene {
 
 #[derive(Debug, Clone)]
 pub struct NodeMessage {
-    pub timestamp: StdInstant,
+    pub timestamp: embassy_time::Instant,
     pub message_type: u8,
     pub packet_size: usize,
     pub packet_count: u8,
@@ -499,8 +499,8 @@ pub(crate) async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshChann
     let mut last_speed_change_at = Instant::now();
     let speed_change_cooldown = Duration::from_millis(30);
     // Auto-speed guardrails to avoid stalling the simulation
-    let auto_speed_min_percent: u32 = 80; // don't go below 80%
-    let auto_speed_max_percent: u32 = 400; // don't exceed UI slider's max
+    let auto_speed_min_percent: u32 = 20; // don't go below 80%
+    let auto_speed_max_percent: u32 = 1000; // don't exceed UI slider's max
 
     loop {
         let mut next_airtime_event = Instant::now() + Duration::from_secs(3600);
@@ -536,7 +536,7 @@ pub(crate) async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshChann
                     let node_radio_strength;
                     if let Some(node) = nodes_map.get_mut(&node_id) {
                         node.node_messages.push(NodeMessage {
-                            timestamp: StdInstant::now(),
+                            timestamp: Instant::now(),
                             message_type: packet.message_type(),
                             sender_node: node_id,
                             packet_size: packet.length,
@@ -660,7 +660,6 @@ pub(crate) async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshChann
                 if event_reached {
                     // Check and report processing delay relative to the scheduled event
                     let time_delay = now.duration_since(next_airtime_event);
-                    log::debug!("Timer::at fired; next_airtime_event reached with delay = {} ms", time_delay.as_millis());
                     delay_for_autospeed = Some(time_delay);
                     if time_delay > Duration::from_millis(10) {
                         let delay_ms = time_delay.as_millis() as u32;
@@ -677,9 +676,10 @@ pub(crate) async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshChann
                 if auto_speed_enabled {
                     if let Some(time_delay) = delay_for_autospeed {
                         // Increase speed slowly when we have headroom
-                        if time_delay < Duration::from_millis(4) {
+                        if time_delay < Duration::from_millis(8) {
                             upcounter += 1;
-                            if upcounter > 10 {
+                            //log::debug!("Auto-speed upcounter: {}", upcounter);
+                            if upcounter > 5 {
                                 let now = Instant::now();
                                 if now - last_speed_change_at >= speed_change_cooldown {
                                     let mut percent = time_driver::get_simulation_speed_percent();
@@ -687,6 +687,8 @@ pub(crate) async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshChann
                                         percent += 1;
                                         log::info!("Increasing UI speed to {}%", percent);
                                         time_driver::set_simulation_speed_percent(percent);
+                                        log::info!("Get simulation speed: {}%", time_driver::get_simulation_speed_percent());
+                                        _ = ui_refresh_tx.try_send(UIRefreshState::SimulationSpeedChanged(percent));
                                         last_speed_change_at = now;
                                     }
                                 }
@@ -705,6 +707,7 @@ pub(crate) async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshChann
                                     percent -= 1;
                                     log::info!("Decreasing UI speed to {}%", percent);
                                     time_driver::set_simulation_speed_percent(percent);
+                                    _ = ui_refresh_tx.try_send(UIRefreshState::SimulationSpeedChanged(percent));
                                     last_speed_change_at = now;
                                 }
                             }
@@ -806,7 +809,7 @@ pub(crate) async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshChann
                                 total_received_packets += 1;
 
                                 node.node_messages.push(NodeMessage {
-                                    timestamp: StdInstant::now(),
+                                    timestamp: Instant::now(),
                                     message_type: node.airtime_waiting_packets[packet_to_process_index].packet.message_type(),
                                     sender_node: node.airtime_waiting_packets[packet_to_process_index].sender_node_id,
                                     packet_size: node.airtime_waiting_packets[packet_to_process_index].packet.length,
@@ -826,7 +829,7 @@ pub(crate) async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshChann
                             } else if collision {
                                 total_collision += 1;
                                 node.node_messages.push(NodeMessage {
-                                    timestamp: StdInstant::now(),
+                                    timestamp: Instant::now(),
                                     message_type: node.airtime_waiting_packets[packet_to_process_index].packet.message_type(),
                                     sender_node: node.airtime_waiting_packets[packet_to_process_index].sender_node_id,
                                     packet_size: node.airtime_waiting_packets[packet_to_process_index].packet.length,

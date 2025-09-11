@@ -12,6 +12,7 @@ struct ScaledClock {
     origin_real: StdInstant,   // host reference time
     origin_virtual_ticks: u64, // in embassy ticks
     scale_q32: u64,            // e.g., 0.5 = 0.5 * ONE_Q32
+    last_set_percent: u32,     // exact percent requested by caller (avoids FP truncation off-by-one)
 }
 
 #[derive(Default)]
@@ -34,6 +35,7 @@ fn clock() -> &'static Mutex<ScaledClock> {
             origin_real: StdInstant::now(),
             origin_virtual_ticks: 0,
             scale_q32: ONE_Q32,
+            last_set_percent: 100,
         })
     })
 }
@@ -64,7 +66,12 @@ fn map_real_to_virtual(r: StdInstant) -> u64 {
 
 fn map_virtual_to_real(v_target: u64) -> StdInstant {
     let clock_lock = clock().lock().unwrap();
-    let virt_dt = v_target.wrapping_sub(clock_lock.origin_virtual_ticks);
+    // If rebasing moved origin_virtual_ticks past v_target, treat it as due now instead of wrapping
+    // (wrapping would create an enormous virt_dt and thus absurd wait durations).
+    let virt_dt = match v_target.checked_sub(clock_lock.origin_virtual_ticks) {
+        Some(dt) => dt,
+        None => return clock_lock.origin_real, // already due
+    };
     let real_ticks = ((virt_dt as u128) * (ONE_Q32 as u128) / (clock_lock.scale_q32 as u128)) as u64;
     let real_ns = (real_ticks as u128) * 1_000_000_000u128 / (tick_hz() as u128);
     clock_lock.origin_real + Duration::from_nanos(real_ns as u64)
@@ -142,8 +149,7 @@ fn scheduler_thread() {
             for ts in to_remove {
                 guard.queue.remove(&ts);
             }
-            log::trace!("scheduler: draining due; now_v={} woke={} remaining={}",
-                now_v, ready.len(), guard.queue.len());
+            log::trace!("scheduler: draining due; now_v={} woke={} remaining={}", now_v, ready.len(), guard.queue.len());
         }
 
         // 4) Wake outside locks
@@ -157,16 +163,16 @@ struct ScaledDriver;
 
 impl Driver for ScaledDriver {
     fn now(&self) -> u64 {
-    let v = map_real_to_virtual(real_now());
-    log::trace!("driver.now -> {}", v);
-    v
+        let v = map_real_to_virtual(real_now());
+        log::trace!("driver.now -> {}", v);
+        v
     }
 
     fn schedule_wake(&self, at: u64, waker: &Waker) {
         ensure_scheduler_thread();
         let mut guard = sched().lock().unwrap();
         guard.queue.entry(at).or_default().push(waker.clone());
-    log::trace!("schedule_wake at={} queue_len={}", at, guard.queue.len());
+        log::trace!("schedule_wake at={} queue_len={}", at, guard.queue.len());
         drop(guard);
         cv().notify_all();
     }
@@ -186,28 +192,36 @@ pub fn set_simulation_speed_percent(percent: u32) {
     }
     log::debug!("Set current simulation speed percent: {} (was {}%)", percent, current_pct);
     let r_now = real_now();
-
-    // Capture old mapping parameters before changing
-    let _ov_old = {
-        let c = clock().lock().unwrap();
-        c.origin_virtual_ticks
-    };
-    // Virtual 'now' under the old mapping
+    // Virtual 'now' under the OLD mapping (before mutation)
     let v_now_old = map_real_to_virtual(r_now);
-
-    // Compute new scale
     let new_scale_q32 = ((percent as u128) * (ONE_Q32 as u128) / 100u128) as u64;
 
-    // Update clock: rebase origins to keep v_now continuous, and apply new scale
+    // Adjust ONLY origin_real to preserve continuity, keeping origin_virtual_ticks unchanged so
+    // existing queued deadlines never become "in the past" via an origin shift (which previously
+    // caused wrapping_sub underflow and gigantic wait durations).
     {
         let mut c = clock().lock().unwrap();
-        c.origin_real = r_now;
-        c.origin_virtual_ticks = v_now_old;
+        let origin_virtual = c.origin_virtual_ticks; // unchanged
+        let delta_v = v_now_old.saturating_sub(origin_virtual) as u128; // ticks
+        // real_elapsed_new_ticks = delta_v / new_scale  (since v = origin + real*scale)
+        let real_elapsed_new_ticks = if new_scale_q32 == 0 {
+            0
+        } else {
+            delta_v * (ONE_Q32 as u128) / (new_scale_q32 as u128)
+        };
+        let real_elapsed_new_ns = real_elapsed_new_ticks * 1_000_000_000u128 / (tick_hz() as u128);
+        let dur = Duration::from_nanos(real_elapsed_new_ns.min(u64::MAX as u128) as u64);
+        // Set new origin_real = r_now - dur (checked to avoid panic if dur > r_now elapsed span)
+        if let Some(new_origin_real) = r_now.checked_sub(dur) {
+            c.origin_real = new_origin_real;
+        } else {
+            // Fallback: if subtraction underflows (extremely large dur), just anchor at now.
+            c.origin_real = r_now;
+        }
         c.scale_q32 = new_scale_q32;
+        c.last_set_percent = percent; // record exact requested percent
     }
-
-    // Keep queued wakeups' virtual deadlines unchanged. Only bump epoch so the scheduler re-evaluates waits
-    // under the new real<->virtual mapping. This prevents collapsing far-future timers to 'now'.
+    // Epoch bump so scheduler re-evaluates earliest deadline with new mapping immediately.
     {
         let mut s = sched().lock().unwrap();
         s.epoch = s.epoch.wrapping_add(1);
@@ -217,7 +231,7 @@ pub fn set_simulation_speed_percent(percent: u32) {
 
 pub fn get_simulation_speed_percent() -> u32 {
     let clock_lock = clock().lock().unwrap();
-    let pct = ((clock_lock.scale_q32 as u128) * 100u128 / (ONE_Q32 as u128)) as u64;
+    let pct = clock_lock.last_set_percent;
     log::debug!("Get current simulation speed percent: {}", pct);
-    pct as u32
+    pct
 }
