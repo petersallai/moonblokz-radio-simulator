@@ -1,6 +1,3 @@
-- Time speed control implementation
 - Generate multiple test maps
 - Dynamic size handling
-- Network link quality in radio message flow
-- Message count measurement (m/n %)
 - Random timed repeating measurement

@@ -187,10 +187,8 @@ pub fn set_simulation_speed_percent(percent: u32) {
     // Fast path: no-op if unchanged
     let current_pct = get_simulation_speed_percent();
     if current_pct == percent {
-        log::debug!("Set simulation speed unchanged: {}% (no-op)", percent);
         return;
     }
-    log::debug!("Set current simulation speed percent: {} (was {}%)", percent, current_pct);
     let r_now = real_now();
     // Virtual 'now' under the OLD mapping (before mutation)
     let v_now_old = map_real_to_virtual(r_now);
@@ -232,6 +230,5 @@ pub fn set_simulation_speed_percent(percent: u32) {
 pub fn get_simulation_speed_percent() -> u32 {
     let clock_lock = clock().lock().unwrap();
     let pct = clock_lock.last_set_percent;
-    log::debug!("Get current simulation speed percent: {}", pct);
     pct
 }

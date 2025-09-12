@@ -54,6 +54,8 @@ enum UIRefreshState {
     SimulationDelayWarningChanged(u32),
     NodeReachedInMeasurement(u32, u32), // node ID and measurement ID
     SimulationSpeedChanged(u32),        // new speed percent
+    SendMessageInSimulation(u32),       // sequence number
+    PoorAndExcellentLimits(u8, u8),     // poor and excellent limits
 }
 #[derive(Debug)]
 struct NodeUIState {
@@ -99,6 +101,13 @@ struct AppState {
     measurement_50_time: u64,
     measurement_90_time: u64,
     measurement_100_time: u64,
+    measurement_50_message_count: u32,
+    measurement_90_message_count: u32,
+    measurement_100_message_count: u32,
+    measurement_total_time: u64,
+    measurement_total_message_count: u32,
+    poor_limit: u8,
+    excellent_limit: u8,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -137,6 +146,13 @@ impl AppState {
             measurement_50_time: 0,
             measurement_90_time: 0,
             measurement_100_time: 0,
+            measurement_50_message_count: 0,
+            measurement_90_message_count: 0,
+            measurement_100_message_count: 0,
+            measurement_total_time: 0,
+            measurement_total_message_count: 0,
+            poor_limit: 0,
+            excellent_limit: 0,
         }
     }
 }
@@ -182,7 +198,7 @@ impl eframe::App for AppState {
         }
 
         // Repaint periodically so background updates are visible without input
-        ctx.request_repaint_after(Duration::from_millis(50));
+        ctx.request_repaint_after(Duration::from_millis(20));
 
         if self.last_node_info_update.elapsed() > Duration::from_secs(1) {
             if let Some(node_info) = &self.node_info {
@@ -234,6 +250,16 @@ impl eframe::App for AppState {
                 }
                 UIRefreshState::SimulationSpeedChanged(new_speed) => {
                     self.speed_percent = new_speed;
+                }
+                UIRefreshState::SendMessageInSimulation(measurement_id) => {
+                    if self.measurement_identifier == measurement_id {
+                        self.measurement_total_message_count += 1;
+                        self.measurement_total_time = self.measurement_start_time.elapsed().as_secs();
+                    }
+                }
+                UIRefreshState::PoorAndExcellentLimits(poor, excellent) => {
+                    self.poor_limit = poor;
+                    self.excellent_limit = excellent;
                 }
             }
         }
@@ -290,7 +316,8 @@ impl eframe::App for AppState {
                         // Fixed-width, monospace time so following labels don't shift horizontally
                         // Use embassy_time Instant for simulation time (scaled by driver)
                         let sim_secs = embassy_time::Instant::now().as_secs();
-                        let sim_time_str = format!("{:<6}", sim_secs); // fixed 6 chars, left-aligned (e.g., "42    ")
+                        let sim_secs_with_s = format!("{}s", sim_secs);
+                        let sim_time_str = format!("{:<6}", sim_secs_with_s); // fixed 6 chars, left-aligned (e.g., "42    ")
                         ui.label(egui::RichText::new(sim_time_str).monospace().strong());
                         ui.label("Total TX: ");
                         ui.label(egui::RichText::new(self.total_sent_packets.to_string()).strong());
@@ -325,12 +352,11 @@ impl eframe::App for AppState {
                 // Column 2: Measured distribution
                 cols[1].vertical(|ui| {
                     let measurement_duration_string = if self.measurement_identifier > 0 {
-                        format!("{}", self.measurement_start_time.elapsed().as_secs())
+                        let measurement_total_time_with_s = format!("{}s", self.measurement_total_time);
+                        format!("{:<7}", measurement_total_time_with_s)
                     } else {
                         "-".into()
                     };
-
-                    // Note: total nodes accessed count is available from reached_nodes.len() when needed
 
                     let distribution_percentage = if self.nodes.len() > 0 && self.measurement_identifier > 0 {
                         (self.reached_nodes.len() as f64 / self.nodes.len() as f64) * 100.0
@@ -346,28 +372,55 @@ impl eframe::App for AppState {
 
                     if distribution_percentage >= 50.0 && self.measurement_50_time == 0 {
                         self.measurement_50_time = self.measurement_start_time.elapsed().as_secs();
+                        self.measurement_50_message_count = self.measurement_total_message_count;
                     }
 
                     if distribution_percentage >= 90.0 && self.measurement_90_time == 0 {
                         self.measurement_90_time = self.measurement_start_time.elapsed().as_secs();
+                        self.measurement_90_message_count = self.measurement_total_message_count;
                     }
 
                     if distribution_percentage >= 99.9 && self.measurement_100_time == 0 {
                         self.measurement_100_time = self.measurement_start_time.elapsed().as_secs();
+                        self.measurement_100_message_count = self.measurement_total_message_count;
                     }
 
                     let measurement_50_time_string = if self.measurement_50_time > 0 {
-                        format!("{}", self.measurement_50_time)
+                        format!("{}s", self.measurement_50_time)
                     } else {
                         "-".into()
                     };
                     let measurement_90_time_string = if self.measurement_90_time > 0 {
-                        format!("{}", self.measurement_90_time)
+                        format!("{}s", self.measurement_90_time)
                     } else {
                         "-".into()
                     };
                     let measurement_100_time_string = if self.measurement_100_time > 0 {
-                        format!("{}", self.measurement_100_time)
+                        format!("{}s", self.measurement_100_time)
+                    } else {
+                        "-".into()
+                    };
+
+                    let p_per_n_string = if self.measurement_total_message_count > 0 && self.nodes.len() > 0 {
+                        format!("{}", (self.measurement_total_message_count * 100) / self.nodes.len() as u32)
+                    } else {
+                        "-".into()
+                    };
+
+                    let p_per_n_50_string = if self.measurement_50_message_count > 0 && self.nodes.len() > 0 {
+                        format!("{}", (self.measurement_50_message_count * 100) / self.nodes.len() as u32)
+                    } else {
+                        "-".into()
+                    };
+
+                    let p_per_n_90_string = if self.measurement_90_message_count > 0 && self.nodes.len() > 0 {
+                        format!("{}", (self.measurement_90_message_count * 100) / self.nodes.len() as u32)
+                    } else {
+                        "-".into()
+                    };
+
+                    let p_per_n_100_string = if self.measurement_100_message_count > 0 && self.nodes.len() > 0 {
+                        format!("{}", (self.measurement_100_message_count * 100) / self.nodes.len() as u32)
                     } else {
                         "-".into()
                     };
@@ -375,29 +428,39 @@ impl eframe::App for AppState {
                     ui.heading("Measured data");
                     ui.separator();
                     ui.horizontal(|ui| {
-                        ui.label("Measurement time: ");
-                        ui.label(egui::RichText::new(measurement_duration_string).strong());
-                        ui.label(" seconds");
+                        ui.label("Total time: ");
+                        ui.label(egui::RichText::new(measurement_duration_string).strong().monospace());
+                        ui.label("packets: ");
+                        ui.label(egui::RichText::new(format!("{}", self.measurement_total_message_count)).strong());
                     });
                     ui.horizontal(|ui| {
-                        ui.label("Distribution percentage: ");
-                        ui.label(egui::RichText::new(format!("{}", distribution_percentage_string)).strong());
+                        ui.label("Distribution: ");
+                        ui.label(egui::RichText::new(format!("{}", distribution_percentage_string)).strong().monospace());
+                        ui.label("% ");
+                        ui.label("  P/N: ");
+                        ui.label(egui::RichText::new(p_per_n_string).strong());
                         ui.label("%");
                     });
                     ui.horizontal(|ui| {
                         ui.label("50% time: ");
                         ui.label(egui::RichText::new(format!("{}", measurement_50_time_string)).strong());
-                        ui.label("seconds");
+                        ui.label("   P/N:");
+                        ui.label(egui::RichText::new(p_per_n_50_string).strong());
+                        ui.label("%");
                     });
                     ui.horizontal(|ui| {
                         ui.label("90% time: ");
                         ui.label(egui::RichText::new(format!("{}", measurement_90_time_string)).strong());
-                        ui.label("seconds");
+                        ui.label("   P/N:");
+                        ui.label(egui::RichText::new(p_per_n_90_string).strong());
+                        ui.label("%");
                     });
                     ui.horizontal(|ui| {
                         ui.label("100% time: ");
                         ui.label(egui::RichText::new(format!("{}", measurement_100_time_string)).strong());
-                        ui.label("seconds");
+                        ui.label("   P/N:");
+                        ui.label(egui::RichText::new(p_per_n_100_string).strong());
+                        ui.label("%");
                     });
                 });
 
@@ -517,6 +580,11 @@ impl eframe::App for AppState {
                                     self.measurement_50_time = 0;
                                     self.measurement_90_time = 0;
                                     self.measurement_100_time = 0;
+                                    self.measurement_total_time = 0;
+                                    self.measurement_total_message_count = 0;
+                                    self.measurement_50_message_count = 0;
+                                    self.measurement_90_message_count = 0;
+                                    self.measurement_100_message_count = 0;
                                 }
                             }
                         });
@@ -652,7 +720,19 @@ impl eframe::App for AppState {
                                                         let rect = ui.available_rect_before_wrap();
                                                         ui.painter().rect_filled(rect, 0.0, fill);
                                                     }
-                                                    ui.colored_label(row_color, link_quality_string);
+
+                                                    let mut link_quality_color = Color32::WHITE;
+
+                                                    if self.poor_limit > 0 && self.excellent_limit > 0 {}
+                                                    if msg.link_quality <= self.poor_limit {
+                                                        link_quality_color = Color32::RED;
+                                                    } else if msg.link_quality >= self.excellent_limit {
+                                                        link_quality_color = Color32::GREEN;
+                                                    } else {
+                                                        link_quality_color = Color32::YELLOW;
+                                                    }
+
+                                                    ui.colored_label(link_quality_color, link_quality_string);
                                                 });
                                             });
                                         });

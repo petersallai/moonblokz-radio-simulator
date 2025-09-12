@@ -21,7 +21,6 @@ use crate::{
 };
 
 const CAPTURE_THRESHOLD: f32 = 6.0;
-const MEASUREMENT_HEADER: [u8; 4] = [0x01, 0x02, 0x03, 0x04];
 const NODE_INPUT_QUEUE_SIZE: usize = 10;
 type NodeInputQueue = embassy_sync::channel::Channel<CriticalSectionRawMutex, NodeInputMessage, NODE_INPUT_QUEUE_SIZE>;
 type NodeInputQueueReceiver = embassy_sync::channel::Receiver<'static, CriticalSectionRawMutex, NodeInputMessage, NODE_INPUT_QUEUE_SIZE>;
@@ -311,15 +310,6 @@ async fn node_task(spawner: Spawner, radio_module_config: RadioModuleConfig, nod
     let radio_input_queue_sender = radio_input_queue.sender();
     let radio_device = moonblokz_radio_lib::radio_device_simulator::RadioDevice::new(radio_output_queue.sender(), radio_input_queue.receiver());
     let mut manager = RadioCommunicationManager::new();
-    /*let radio_config = moonblokz_radio_lib::RadioConfiguration {
-        delay_between_tx_packets: 1,
-        delay_between_tx_messages: 10,
-        echo_request_minimal_interval: 500,
-        echo_messages_target_interval: 1,
-        echo_gathering_timeout: 1,
-        relay_position_delay: 1,
-        scoring_matrix: ScoringMatrix::new_from_encoded(&[255u8, 243u8, 65u8, 82u8, 143u8]),
-    };*/
 
     let radio_config = moonblokz_radio_lib::RadioConfiguration {
         delay_between_tx_packets: radio_module_config.delay_between_tx_packets,
@@ -328,7 +318,7 @@ async fn node_task(spawner: Spawner, radio_module_config: RadioModuleConfig, nod
         echo_messages_target_interval: radio_module_config.echo_messages_target_interval,
         echo_gathering_timeout: radio_module_config.echo_gathering_timeout,
         relay_position_delay: radio_module_config.relay_position_delay,
-        scoring_matrix: ScoringMatrix::new_from_encoded(&[255u8, 243u8, 65u8, 82u8, 143u8]),
+        scoring_matrix: ScoringMatrix::new_from_encoded(&radio_module_config.scoring_matrix),
     };
 
     let _ = manager.initialize(radio_config, spawner, radio_device, node_id, node_id as u64);
@@ -341,20 +331,17 @@ async fn node_task(spawner: Spawner, radio_module_config: RadioModuleConfig, nod
                 if let Ok(msg) = res {
                     if msg.message_type() == MessageType::AddBlock as u8 {
                         let sequence = u32::from_le_bytes([msg.payload[5], msg.payload[6], msg.payload[7], msg.payload[8]]);
-                        let measurement_header = u32::from_le_bytes([msg.payload[13], msg.payload[14], msg.payload[15], msg.payload[16]]);
                         if arrived_sequences.contains(&sequence) {
                             //duplicate, ignore
                             continue;
                         } else {
                             arrived_sequences.insert(sequence);
-                            if measurement_header == u32::from_le_bytes(MEASUREMENT_HEADER) {
-                                out_tx
-                                    .send(NodeOutputMessage {
-                                        node_id,
-                                        payload: NodeOutputPayload::NodeReachedInMeasurement(sequence),
-                                    })
-                                    .await;
-                            }
+                            out_tx
+                                .send(NodeOutputMessage {
+                                    node_id,
+                                    payload: NodeOutputPayload::NodeReachedInMeasurement(sequence),
+                                })
+                                .await;
 
                             manager.report_message_processing_status(moonblokz_radio_lib::MessageProcessingResult::NewBlockAdded(msg.clone()), true);
                         }
@@ -449,6 +436,12 @@ pub(crate) async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshChann
         }
     };
 
+    let scoring_matrix = ScoringMatrix::new_from_encoded(&scene.radio_module_config.scoring_matrix);
+
+    let poor_limit = scoring_matrix.poor_limit;
+    let excellent_limit = scoring_matrix.excellent_limit;
+    _ = ui_refresh_tx.send(UIRefreshState::PoorAndExcellentLimits(poor_limit, excellent_limit)).await;
+
     // Keep node radio_strength as defined in the scene configuration.
 
     ui_refresh_tx
@@ -495,9 +488,6 @@ pub(crate) async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshChann
 
     let mut upcounter = 0;
     let mut auto_speed_enabled = false;
-    // Cooldown to avoid changing speed too frequently
-    let mut last_speed_change_at = Instant::now();
-    let speed_change_cooldown = Duration::from_millis(30);
     // Auto-speed guardrails to avoid stalling the simulation
     let auto_speed_min_percent: u32 = 20; // don't go below 80%
     let auto_speed_max_percent: u32 = 1000; // don't exceed UI slider's max
@@ -532,6 +522,12 @@ pub(crate) async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshChann
         match select3(nodes_output_channel.receiver().receive(), ui_command_rx.receive(), Timer::at(wait_deadline)).await {
             Either3::First(NodeOutputMessage { node_id, payload }) => match payload {
                 NodeOutputPayload::RadioTransfer(packet) => {
+                    // Handle radio packet transfer simulation
+                    if packet.message_type() == MessageType::AddBlock as u8 {
+                        let sequence = u32::from_le_bytes([packet.data[5], packet.data[6], packet.data[7], packet.data[8]]);
+                        _ = ui_refresh_tx.try_send(UIRefreshState::SendMessageInSimulation(sequence)).ok();
+                    }
+
                     let node_position;
                     let node_radio_strength;
                     if let Some(node) = nodes_map.get_mut(&node_id) {
@@ -640,8 +636,7 @@ pub(crate) async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshChann
                 UICommand::StartMeasurement(node_id, measurement_identifier) => {
                     if let Some(node) = nodes_map.get(&node_id) {
                         if let Some(sender) = &node.node_input_queue_sender {
-                            let mut message_body: [u8; 2000] = [0; 2000];
-                            message_body[0..4].copy_from_slice(&MEASUREMENT_HEADER);
+                            let mut message_body: [u8; 2000] = [22; 2000];
                             let message = RadioMessage::new_add_block(node_id, measurement_identifier, &message_body);
                             let _ = sender.send(NodeInputMessage::SendMessage(message)).await;
                         }
@@ -680,17 +675,11 @@ pub(crate) async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshChann
                             upcounter += 1;
                             //log::debug!("Auto-speed upcounter: {}", upcounter);
                             if upcounter > 5 {
-                                let now = Instant::now();
-                                if now - last_speed_change_at >= speed_change_cooldown {
-                                    let mut percent = time_driver::get_simulation_speed_percent();
-                                    if percent < auto_speed_max_percent {
-                                        percent += 1;
-                                        log::info!("Increasing UI speed to {}%", percent);
-                                        time_driver::set_simulation_speed_percent(percent);
-                                        log::info!("Get simulation speed: {}%", time_driver::get_simulation_speed_percent());
-                                        _ = ui_refresh_tx.try_send(UIRefreshState::SimulationSpeedChanged(percent));
-                                        last_speed_change_at = now;
-                                    }
+                                let mut percent = time_driver::get_simulation_speed_percent();
+                                if percent < auto_speed_max_percent {
+                                    percent += 1;
+                                    time_driver::set_simulation_speed_percent(percent);
+                                    _ = ui_refresh_tx.try_send(UIRefreshState::SimulationSpeedChanged(percent));
                                 }
                                 upcounter = 0;
                             }
@@ -700,16 +689,11 @@ pub(crate) async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshChann
 
                         // Decrease speed only within safe bounds to avoid near-zero speeds
                         if time_delay > Duration::from_millis(8) {
-                            let now = Instant::now();
-                            if now - last_speed_change_at >= speed_change_cooldown {
-                                let mut percent = time_driver::get_simulation_speed_percent();
-                                if percent > auto_speed_min_percent {
-                                    percent -= 1;
-                                    log::info!("Decreasing UI speed to {}%", percent);
-                                    time_driver::set_simulation_speed_percent(percent);
-                                    _ = ui_refresh_tx.try_send(UIRefreshState::SimulationSpeedChanged(percent));
-                                    last_speed_change_at = now;
-                                }
+                            let mut percent = time_driver::get_simulation_speed_percent();
+                            if percent > auto_speed_min_percent {
+                                percent -= 1;
+                                time_driver::set_simulation_speed_percent(percent);
+                                _ = ui_refresh_tx.try_send(UIRefreshState::SimulationSpeedChanged(percent));
                             }
                         }
                     }
