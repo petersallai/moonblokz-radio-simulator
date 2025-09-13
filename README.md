@@ -2,6 +2,8 @@
 
 GUI-based, interactive radio network simulator that drives and visualizes a multi-node system using moonblokz-radio-lib. This application can run the same radio logic as the embedded nodes. The simulator renders a 2D map with nodes and obstacles, simulates radio propagation and collisions, and lets you observe throughput, link quality, and distribution metrics in real time. A scalable virtual-time driver enables accelerated or slowed simulations without timer bursts or stalls.
 
+![App screenshot](docs/images/screenshot.png)
+
 ## What you get
 
 - Scalable virtual time (20–1000%) with smooth, continuous clock mapping
