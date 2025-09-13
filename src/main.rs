@@ -729,15 +729,18 @@ impl eframe::App for AppState {
                                                         ui.painter().rect_filled(rect, 0.0, fill);
                                                     }
 
-                                                    let mut link_quality_color = Color32::WHITE;
+                                                    let link_quality_color;
 
-                                                    if self.poor_limit > 0 && self.excellent_limit > 0 {}
-                                                    if msg.link_quality <= self.poor_limit {
-                                                        link_quality_color = Color32::RED;
-                                                    } else if msg.link_quality >= self.excellent_limit {
-                                                        link_quality_color = Color32::GREEN;
+                                                    if self.poor_limit > 0 && self.excellent_limit > 0 {
+                                                        if msg.link_quality <= self.poor_limit {
+                                                            link_quality_color = Color32::RED;
+                                                        } else if msg.link_quality >= self.excellent_limit {
+                                                            link_quality_color = Color32::GREEN;
+                                                        } else {
+                                                            link_quality_color = Color32::YELLOW;
+                                                        }
                                                     } else {
-                                                        link_quality_color = Color32::YELLOW;
+                                                        link_quality_color = Color32::WHITE;
                                                     }
 
                                                     ui.colored_label(link_quality_color, link_quality_string);
@@ -932,6 +935,7 @@ fn main() {
     let ui_command_rx = ui_command_channel.receiver();
 
     // Spawn Embassy executor on a dedicated background thread
+    // Use very large stack size to handle very large number of simulated nodes
     let _embassy_handle = thread::Builder::new()
         .stack_size(192 * 1024 * 1024)
         .name("embassy-executor".to_string())

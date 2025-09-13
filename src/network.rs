@@ -8,7 +8,7 @@ use moonblokz_radio_lib::{
     radio_device_simulator::{RadioInputQueue, RadioOutputQueue},
 };
 use serde::Deserialize;
-use std::{collections::HashMap, time::Instant as StdInstant};
+use std::collections::HashMap;
 use std::{collections::HashSet, fs};
 
 use crate::{
@@ -116,13 +116,11 @@ pub(crate) enum Obstacle {
     Rectangle {
         #[serde(flatten)]
         position: RectPos,
-        reduction: u32,
     },
     #[serde(rename = "circle")]
     Circle {
         #[serde(flatten)]
         position: CirclePos,
-        reduction: u32,
     },
 }
 #[derive(Deserialize, Clone)]
@@ -636,7 +634,7 @@ pub(crate) async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshChann
                 UICommand::StartMeasurement(node_id, measurement_identifier) => {
                     if let Some(node) = nodes_map.get(&node_id) {
                         if let Some(sender) = &node.node_input_queue_sender {
-                            let mut message_body: [u8; 2000] = [22; 2000];
+                            let message_body: [u8; 2000] = [22; 2000];
                             let message = RadioMessage::new_add_block(node_id, measurement_identifier, &message_body);
                             let _ = sender.send(NodeInputMessage::SendMessage(message)).await;
                         }

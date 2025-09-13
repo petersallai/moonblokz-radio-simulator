@@ -78,19 +78,6 @@ pub(crate) fn calculate_snr_limit(lora_parameters: &LoraParameters) -> f32 {
     return snr_limit;
 }
 
-pub(crate) fn calculate_tx_power_from_effective_distance(
-    effective_distance: f32,
-    lora_parameters: &LoraParameters,
-    path_loss_parameters: &PathLossParameters,
-) -> f32 {
-    // Inverse of the above: required P_tx so that at distance d, P_rx equals receiving limit.
-    //   P_tx = RL + PL(d) = RL + PL0 + 10n log10(d)
-    let d = effective_distance.max(1.0);
-    let pl0 = path_loss_parameters.path_loss_at_reference_distance;
-    let rl = calculate_receiving_limit_with_basic_noise(lora_parameters, path_loss_parameters);
-    rl + pl0 + 10.0 * path_loss_parameters.path_loss_exponent * d.log10()
-}
-
 pub(crate) fn calculate_air_time(lora_parameters: LoraParameters, payload_size: usize) -> f32 {
     // LoRa symbol time in seconds: T_sym = 2^SF / BW
     let symbol_time = 2.0_f32.powi(lora_parameters.spreading_factor as i32) / lora_parameters.bandwidth as f32;
@@ -131,10 +118,6 @@ pub(crate) fn calculate_air_time(lora_parameters: LoraParameters, payload_size: 
 pub(crate) fn calculate_rssi(distance: f32, tx_power_dbm: f32, params: &PathLossParameters) -> f32 {
     let path_loss_db = calculate_path_loss(distance, params);
     tx_power_dbm - path_loss_db
-}
-
-pub(crate) fn calculate_snr(rssi: f32, params: &PathLossParameters) -> f32 {
-    rssi - params.noise_floor
 }
 
 pub(crate) fn dbm_to_mw(dbm: f32) -> f32 {

@@ -96,7 +96,6 @@ fn scheduler_thread() {
         let (next_at, snapshot_epoch) = loop {
             let guard = sched().lock().unwrap();
             if guard.queue.is_empty() {
-                log::trace!("scheduler: queue empty; waiting for work");
                 let guard = cv().wait(guard).unwrap();
                 drop(guard);
                 continue;
@@ -104,7 +103,6 @@ fn scheduler_thread() {
             let (&next_at, _) = guard.queue.iter().next().unwrap();
             let snapshot_epoch = guard.epoch;
             drop(guard);
-            log::trace!("scheduler: snapshot next_at={} epoch={}", next_at, snapshot_epoch);
             break (next_at, snapshot_epoch);
         };
 
@@ -119,12 +117,10 @@ fn scheduler_thread() {
             }
             // Reacquire the queue lock only for the timed wait; we don't access the clock while holding it.
             let mut guard = sched().lock().unwrap();
-            log::trace!("scheduler: waiting up to {:?}", wait_dur);
             let (new_guard, _timeout_res) = cv().wait_timeout(guard, wait_dur).unwrap();
             guard = new_guard;
             // If epoch changed (speed slider moved) or we were notified, simply iterate again.
             if guard.epoch != snapshot_epoch {
-                log::trace!("scheduler: epoch changed ({} -> {}), re-evaluating", snapshot_epoch, guard.epoch);
                 drop(guard);
                 continue;
             }
@@ -149,7 +145,6 @@ fn scheduler_thread() {
             for ts in to_remove {
                 guard.queue.remove(&ts);
             }
-            log::trace!("scheduler: draining due; now_v={} woke={} remaining={}", now_v, ready.len(), guard.queue.len());
         }
 
         // 4) Wake outside locks
@@ -164,7 +159,6 @@ struct ScaledDriver;
 impl Driver for ScaledDriver {
     fn now(&self) -> u64 {
         let v = map_real_to_virtual(real_now());
-        log::trace!("driver.now -> {}", v);
         v
     }
 
@@ -172,7 +166,6 @@ impl Driver for ScaledDriver {
         ensure_scheduler_thread();
         let mut guard = sched().lock().unwrap();
         guard.queue.entry(at).or_default().push(waker.clone());
-        log::trace!("schedule_wake at={} queue_len={}", at, guard.queue.len());
         drop(guard);
         cv().notify_all();
     }
