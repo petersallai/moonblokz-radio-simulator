@@ -123,6 +123,68 @@ pub(crate) enum Obstacle {
         position: CirclePos,
     },
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn p(x: u32, y: u32) -> Point {
+        Point { x, y }
+    }
+
+    #[test]
+    fn geometry_point_in_rect_and_circle() {
+        let rect = RectPos {
+            top_left: p(10, 10),
+            bottom_right: p(20, 20),
+        };
+        assert!(super::point_in_rect(&p(10, 10), &rect));
+        assert!(super::point_in_rect(&p(15, 15), &rect));
+        assert!(super::point_in_rect(&p(20, 20), &rect));
+        assert!(!super::point_in_rect(&p(9, 10), &rect));
+
+        let circle = CirclePos { center: p(50, 50), radius: 10 };
+        assert!(super::point_in_circle(&p(50, 50), &circle));
+        assert!(super::point_in_circle(&p(60, 50), &circle));
+        assert!(!super::point_in_circle(&p(61, 50), &circle));
+    }
+
+    #[test]
+    fn geometry_segments_intersect_basic_cases() {
+        let a = p(0, 0);
+        let b = p(10, 10);
+        let c = p(0, 10);
+        let d = p(10, 0);
+        assert!(super::segments_intersect(&a, &b, &c, &d));
+
+        // Collinear overlap
+        let e = p(0, 0);
+        let f = p(10, 0);
+        let g = p(5, 0);
+        let h = p(15, 0);
+        assert!(super::segments_intersect(&e, &f, &g, &h));
+
+        // Disjoint
+        let i = p(0, 0);
+        let j = p(1, 1);
+        let k = p(2, 2);
+        let l = p(3, 3);
+        assert!(!super::segments_intersect(&i, &j, &k, &l));
+    }
+
+    #[test]
+    fn is_intersect_handles_degenerate_segment() {
+        let obstacles = vec![Obstacle::Rectangle {
+            position: RectPos {
+                top_left: p(0, 0),
+                bottom_right: p(10, 10),
+            },
+        }];
+        // Point inside rectangle → considered intersecting
+        assert!(super::is_intersect(&p(5, 5), &p(5, 5), &obstacles));
+        // Point outside → not intersecting
+        assert!(!super::is_intersect(&p(20, 20), &p(20, 20), &obstacles));
+    }
+}
 #[derive(Deserialize, Clone)]
 struct RadioModuleConfig {
     delay_between_tx_packets: u8,
@@ -158,7 +220,7 @@ fn distance(a: &Point, b: &Point) -> f32 {
     (dx * dx + dy * dy).sqrt()
 }
 
-fn is_intersect(point1: &Point, point2: &Point, obstacles: &Vec<Obstacle>) -> bool {
+fn is_intersect(point1: &Point, point2: &Point, obstacles: &[Obstacle]) -> bool {
     // Early out if degenerate segment
     if point1.x == point2.x && point1.y == point2.y {
         // Treat as a point: intersects if the point is inside any obstacle
@@ -487,7 +549,7 @@ pub(crate) async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshChann
     let mut upcounter = 0;
     let mut auto_speed_enabled = false;
     // Auto-speed guardrails to avoid stalling the simulation
-    let auto_speed_min_percent: u32 = 20; // don't go below 80%
+    let auto_speed_min_percent: u32 = 20; // don't go below 20%
     let auto_speed_max_percent: u32 = 1000; // don't exceed UI slider's max
 
     loop {

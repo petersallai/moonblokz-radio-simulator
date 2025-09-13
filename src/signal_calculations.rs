@@ -43,7 +43,7 @@ pub(crate) fn calculate_path_loss(distance: f32, params: &PathLossParameters) ->
 // Assumptions:
 // - d0 = 1 meter (anchor). We take PL(d0) from the provided parameters.
 // - Receiver sensitivity, antenna gains, margins, and noise floor are ignored; this yields an upper-bound distance.
-// - Shadowing is intentionally not sampled here to keep the estimate stable across calls.
+// - Shadowing is intentionally not sampled here to keep the estimate stable across calls. The result is a statistical average, not a specific link instance.
 pub(crate) fn calculate_effective_distance(tx_power_dbm: f32, lora_parameters: &LoraParameters, path_loss_parameters: &PathLossParameters) -> f32 {
     // Find distance d where received power equals the receiving limit (sensitivity threshold):
     //   P_rx(dBm) = P_tx(dBm) - PL(d) = receiving_limit
@@ -137,4 +137,81 @@ pub(crate) fn get_cad_time(lora_parameters: &LoraParameters) -> Duration {
     // Typical length of Lora CAD is the time of 2 symbols
     let symbol_time = 2.0_f32.powi(lora_parameters.spreading_factor as i32) / lora_parameters.bandwidth as f32;
     Duration::from_micros((2.0 * symbol_time * 1000000.0) as u64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn params_sf_bw(sf: u8, bw: u32) -> LoraParameters {
+        LoraParameters {
+            bandwidth: bw,
+            spreading_factor: sf,
+            coding_rate: 1,
+            preamble_symbols: 8.0,
+            crc_enabled: true,
+            low_data_rate_optimization: false,
+        }
+    }
+
+    fn default_pathloss() -> PathLossParameters {
+        PathLossParameters {
+            path_loss_exponent: 2.0,
+            shadowing_sigma: 0.0,
+            path_loss_at_reference_distance: 40.0,
+            noise_floor: -120.0,
+        }
+    }
+
+    #[test]
+    fn preamble_and_cad_times_scale_with_symbol_time() {
+        let lp = params_sf_bw(7, 125_000); // T_sym = 2^7/125k ≈ 1.024 ms
+        let pre = get_preamble_time(&lp);
+        let cad = get_cad_time(&lp);
+        // Expected preamble: (8 + 4.25) * 1.024ms ≈ 12.25 * 1.024ms ≈ 12.544 ms
+        assert!((pre.as_micros() as i64 - 12_544).abs() <= 300); // allow small rounding
+        // CAD should be roughly 2 symbols ≈ 2.048 ms
+        assert!((cad.as_micros() as i64 - 2_048).abs() <= 200);
+    }
+
+    #[test]
+    fn airtime_increases_with_payload_and_sf() {
+        let mut lp = params_sf_bw(7, 125_000);
+        let t_small = calculate_air_time(lp.clone(), 10);
+        let t_big = calculate_air_time(lp.clone(), 100);
+        assert!(t_big > t_small);
+
+        lp.spreading_factor = 9;
+        let t_sf9 = calculate_air_time(lp, 10);
+        assert!(t_sf9 > t_small);
+    }
+
+    #[test]
+    fn snr_limits_match_expectations() {
+        for (sf, expect) in [(7, -7.5), (8, -10.0), (9, -12.5), (10, -15.0), (11, -17.5), (12, -20.0)] {
+            let lp = params_sf_bw(sf, 125_000);
+            let lim = calculate_snr_limit(&lp);
+            assert!((lim - expect).abs() < 0.51);
+        }
+    }
+
+    #[test]
+    fn effective_distance_monotonic_with_tx_power() {
+        let lp = params_sf_bw(7, 125_000);
+        let pl = default_pathloss();
+        let d_low = calculate_effective_distance(0.0, &lp, &pl);
+        let d_mid = calculate_effective_distance(10.0, &lp, &pl);
+        let d_high = calculate_effective_distance(20.0, &lp, &pl);
+        assert!(d_low < d_mid && d_mid < d_high);
+    }
+
+    #[test]
+    fn dbm_mw_conversion_roundtrip_reasonable() {
+        let vals = [-100.0, -50.0, 0.0, 10.0];
+        for v in vals {
+            let mw = dbm_to_mw(v);
+            let v2 = mw_to_dbm(mw);
+            assert!((v - v2).abs() < 1e-5);
+        }
+    }
 }

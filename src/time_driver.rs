@@ -74,7 +74,9 @@ fn map_virtual_to_real(v_target: u64) -> StdInstant {
     };
     let real_ticks = ((virt_dt as u128) * (ONE_Q32 as u128) / (clock_lock.scale_q32 as u128)) as u64;
     let real_ns = (real_ticks as u128) * 1_000_000_000u128 / (tick_hz() as u128);
-    clock_lock.origin_real + Duration::from_nanos(real_ns as u64)
+    // Clamp to avoid potential u128 -> u64 truncation on very long durations
+    let real_ns_u64 = real_ns.min(u64::MAX as u128) as u64;
+    clock_lock.origin_real + Duration::from_nanos(real_ns_u64)
 }
 
 fn ensure_scheduler_thread() {
@@ -224,4 +226,63 @@ pub fn get_simulation_speed_percent() -> u32 {
     let clock_lock = clock().lock().unwrap();
     let pct = clock_lock.last_set_percent;
     pct
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex as StdMutex;
+
+    // Serialize tests touching global clock/scheduler state
+    static TEST_GUARD: StdMutex<()> = StdMutex::new(());
+
+    #[test]
+    fn continuity_on_speed_change_preserves_mapping() {
+        let _g = TEST_GUARD.lock().unwrap();
+        // Reset to a known speed
+        set_simulation_speed_percent(100);
+        let anchor = real_now();
+        let v_before = map_real_to_virtual(anchor);
+        // Change speed and ensure mapping of the SAME real instant is (nearly) identical
+        set_simulation_speed_percent(400);
+        let v_after = map_real_to_virtual(anchor);
+        // Allow tiny tolerance in ticks due to integer rounding
+        let diff = if v_after > v_before { v_after - v_before } else { v_before - v_after };
+        assert!(diff <= tick_hz() / 100, "virtual mapping changed too much on speed change: diff={} ticks", diff);
+    }
+
+    #[test]
+    fn virtual_to_real_scales_inverse_with_speed() {
+    let _g = TEST_GUARD.lock().unwrap();
+    // Reset to a known speed then set desired
+    set_simulation_speed_percent(100);
+    set_simulation_speed_percent(200); // x2 virtual vs real
+        let now_r = real_now();
+        let now_v = map_real_to_virtual(now_r);
+        // Target +0.2 virtual seconds
+        let dt_v_ticks = (tick_hz() as f64 * 0.2) as u64;
+        let target_v = now_v.wrapping_add(dt_v_ticks);
+        let target_r = map_virtual_to_real(target_v);
+        let real_dt = target_r.duration_since(now_r);
+        let expected_secs = 0.2 / 2.0; // half a real second factor since 200%
+        let diff = (real_dt.as_secs_f64() - expected_secs).abs();
+        assert!(diff < 0.01, "expected ~{expected_secs}s, got {:?}", real_dt);
+    }
+
+    #[test]
+    fn map_virtual_to_real_handles_past_targets() {
+        let _g = TEST_GUARD.lock().unwrap();
+        set_simulation_speed_percent(100);
+        let c = clock().lock().unwrap();
+        let origin_v = c.origin_virtual_ticks;
+        let origin_r = c.origin_real;
+        drop(c);
+    // v_target just before origin_virtual should be treated as due now (origin_real).
+    // Use saturating_sub to avoid wrap-around when origin_v == 0.
+    let v_target = origin_v.saturating_sub(1);
+        let r = map_virtual_to_real(v_target);
+        // Within small ns tolerance
+        let d = if r > origin_r { r - origin_r } else { origin_r - r };
+        assert!(d < Duration::from_millis(1));
+    }
 }
