@@ -20,7 +20,7 @@
     "echo_messages_target_interval": 50,
     "echo_gathering_timeout": 10,
     "relay_position_delay": 0,
-    "scoring_matrix": [10, 20, 30, 40, 50]
+    "scoring_matrix": [255, 243, 65, 82, 143]
   },
   "nodes": [
     { "node_id": 1, "position": { "x": 1000, "y": 1000 }, "radio_strength": 14.0 },
