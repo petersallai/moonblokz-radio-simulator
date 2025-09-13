@@ -1,3 +1,21 @@
+//! Scaled virtual time driver for Embassy.
+//!
+//! This module implements a global `embassy_time_driver::Driver` that maps
+//! real (host) time to a virtual clock whose speed can be adjusted at runtime
+//! via a percentage slider. The mapping preserves virtual-time continuity when
+//! the speed changes and avoids timer “bursts” or starvation by:
+//!
+//! - Rebasing only the real origin on speed changes, keeping the virtual origin
+//!   fixed so scheduled deadlines never wrap into the past.
+//! - Slicing scheduler waits (<= 25 ms) and bumping an epoch flag on speed
+//!   updates so the scheduler re-evaluates promptly.
+//! - Guarding conversions between real/virtual to avoid under/overflow.
+//!
+//! Public helpers `set_simulation_speed_percent` and
+//! `get_simulation_speed_percent` provide an exact set/get contract (no FP
+//! drift). The driver is registered with `time_driver_impl!` and is used by
+//! embassy-time throughout the app.
+
 use core::task::Waker;
 use embassy_time_driver::{Driver, TICK_HZ, time_driver_impl};
 use std::collections::BTreeMap;
@@ -9,10 +27,16 @@ const ONE_Q32: u64 = 1u64 << 32;
 
 #[derive(Debug)]
 struct ScaledClock {
-    origin_real: StdInstant,   // host reference time
-    origin_virtual_ticks: u64, // in embassy ticks
-    scale_q32: u64,            // e.g., 0.5 = 0.5 * ONE_Q32
-    last_set_percent: u32,     // exact percent requested by caller (avoids FP truncation off-by-one)
+    /// Host reference time corresponding to `origin_virtual_ticks`.
+    origin_real: StdInstant,
+    /// Virtual time origin in Embassy ticks (monotonic, wraps on u64).
+    origin_virtual_ticks: u64,
+    /// Q32.32 scale: virtual_dt = real_dt * scale_q32.
+    /// Example: 0.5x speed => 0.5 * ONE_Q32.
+    scale_q32: u64,
+    /// Last exact percent set by the UI; returned verbatim by `get_…` to
+    /// avoid floating-point roundoff surprises.
+    last_set_percent: u32,
 }
 
 #[derive(Default)]
@@ -56,6 +80,8 @@ fn real_now() -> StdInstant {
     StdInstant::now()
 }
 
+/// Map a real (host) timestamp to virtual Embassy ticks using the current
+/// scale and origins. Preserves continuity across speed changes by construction.
 fn map_real_to_virtual(r: StdInstant) -> u64 {
     let clock_lock = clock().lock().unwrap();
     let real_dt = r.saturating_duration_since(clock_lock.origin_real);
@@ -64,6 +90,9 @@ fn map_real_to_virtual(r: StdInstant) -> u64 {
     clock_lock.origin_virtual_ticks.wrapping_add(scaled)
 }
 
+/// Map a virtual Embassy tick target back to a real (host) timestamp.
+/// If the target is before the current virtual origin (due to a rebase), it is
+/// treated as “due now” to avoid underflow and absurd waits.
 fn map_virtual_to_real(v_target: u64) -> StdInstant {
     let clock_lock = clock().lock().unwrap();
     // If rebasing moved origin_virtual_ticks past v_target, treat it as due now instead of wrapping
@@ -79,6 +108,7 @@ fn map_virtual_to_real(v_target: u64) -> StdInstant {
     clock_lock.origin_real + Duration::from_nanos(real_ns_u64)
 }
 
+/// Start the dedicated scheduler thread once. Safe to call repeatedly.
 fn ensure_scheduler_thread() {
     SCHEDULER_STARTED.get_or_init(|| {
         std::thread::Builder::new()
@@ -88,6 +118,14 @@ fn ensure_scheduler_thread() {
     });
 }
 
+/// Waits for the next due virtual deadline and wakes registered wakers.
+///
+/// Key properties:
+/// - Does not hold `SCHED` and `CLOCK` locks at the same time (avoids lock
+///   inversion).
+/// - Waits are sliced (<= MAX_WAIT_SLICE) so speed changes reflect quickly
+///   even if a notify is missed.
+/// - Uses an `epoch` counter to detect speed changes between wait and wakeup.
 fn scheduler_thread() {
     // Maximum slice to wait so scale changes apply promptly even if a notify is missed
     const MAX_WAIT_SLICE: Duration = Duration::from_millis(25);
@@ -159,11 +197,13 @@ fn scheduler_thread() {
 struct ScaledDriver;
 
 impl Driver for ScaledDriver {
+    /// Returns the current virtual time in Embassy ticks.
     fn now(&self) -> u64 {
         let v = map_real_to_virtual(real_now());
         v
     }
 
+    /// Schedule a wakeup for a given virtual-tick timestamp.
     fn schedule_wake(&self, at: u64, waker: &Waker) {
         ensure_scheduler_thread();
         let mut guard = sched().lock().unwrap();
@@ -177,6 +217,8 @@ impl Driver for ScaledDriver {
 time_driver_impl!(static DRIVER: ScaledDriver = ScaledDriver);
 
 // Public UI helpers
+/// Set the simulation speed in percent (1..=1000). Preserves virtual-time
+/// continuity and updates the scheduler epoch for prompt responsiveness.
 pub fn set_simulation_speed_percent(percent: u32) {
     let percent = percent.clamp(1, 1000);
     // Fast path: no-op if unchanged
@@ -222,6 +264,8 @@ pub fn set_simulation_speed_percent(percent: u32) {
     cv().notify_all();
 }
 
+/// Get the simulation speed as last set by `set_simulation_speed_percent`.
+/// This returns the exact UI-facing value without floating-point rounding.
 pub fn get_simulation_speed_percent() -> u32 {
     let clock_lock = clock().lock().unwrap();
     let pct = clock_lock.last_set_percent;

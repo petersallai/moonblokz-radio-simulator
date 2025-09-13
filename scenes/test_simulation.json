@@ -1,0 +1,33 @@
+{
+  "path_loss_parameters": {
+    "path_loss_exponent": 2.5,
+    "shadowing_sigma": 3.0,
+    "path_loss_at_reference_distance": 38.0,
+    "noise_floor": -117.0
+  },
+  "lora_parameters": {
+    "bandwidth": 125000,
+    "spreading_factor": 7,
+    "coding_rate": 4,
+    "preamble_symbols": 8.0,
+    "crc_enabled": true,
+    "low_data_rate_optimization": false
+  },
+  "radio_module_config": {
+    "delay_between_tx_packets": 1,
+    "delay_between_tx_messages": 10,
+    "echo_request_minimal_interval": 200,
+    "echo_messages_target_interval": 100,
+    "echo_gathering_timeout": 1,
+    "relay_position_delay": 20,
+    "scoring_matrix": [255, 243, 65, 82, 143]
+  },
+  "nodes": [
+    { "node_id": 6000, "position": { "x": 8829, "y": 5572 }, "radio_strength": 4.3449326 },
+    { "node_id": 6001, "position": { "x": 2549, "y": 2133 }, "radio_strength": 5.161354 },
+    { "node_id": 6002, "position": { "x": 2432, "y": 319 }, "radio_strength": 11.634331 },
+    { "node_id": 6003, "position": { "x": 8603, "y": 7040 }, "radio_strength": 6.3131485 },
+    { "node_id": 6004, "position": { "x": 6277, "y": 1205 }, "radio_strength": -0.96224976 }
+  ],
+  "obstacles": []
+}

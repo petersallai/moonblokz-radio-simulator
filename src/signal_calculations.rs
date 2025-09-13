@@ -1,3 +1,16 @@
+//! Radio signal and timing calculations.
+//!
+//! Contains helpers for:
+//! - Log-distance path loss with optional log-normal shadowing
+//! - LoRa-inspired airtime, preamble, and CAD duration estimates
+//! - Effective communication distance estimation given a simple link budget
+//! - SNR thresholds and RSSI sampling utilities
+//!
+//! Units:
+//! - Power: dBm, mW (conversion provided)
+//! - Time: seconds (f32) for mathematical expressions, embassy `Duration` for API
+//! - Distance: meters in the physical model; world units are interpreted by the caller
+
 use embassy_time::Duration;
 use rand::thread_rng;
 use rand_distr::{Distribution, Normal};
@@ -44,6 +57,8 @@ pub(crate) fn calculate_path_loss(distance: f32, params: &PathLossParameters) ->
 // - d0 = 1 meter (anchor). We take PL(d0) from the provided parameters.
 // - Receiver sensitivity, antenna gains, margins, and noise floor are ignored; this yields an upper-bound distance.
 // - Shadowing is intentionally not sampled here to keep the estimate stable across calls. The result is a statistical average, not a specific link instance.
+/// Estimate a deterministic “effective distance” based on a basic link budget
+/// without sampling shadowing. Used for range checks and UI visualization.
 pub(crate) fn calculate_effective_distance(tx_power_dbm: f32, lora_parameters: &LoraParameters, path_loss_parameters: &PathLossParameters) -> f32 {
     // Find distance d where received power equals the receiving limit (sensitivity threshold):
     //   P_rx(dBm) = P_tx(dBm) - PL(d) = receiving_limit

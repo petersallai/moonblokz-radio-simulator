@@ -1,3 +1,13 @@
+//! GUI for the MoonBlokz Radio Simulator.
+//!
+//! Uses eframe/egui to render:
+//! - Top metrics and controls (including speed and auto-speed toggles)
+//! - Right-side inspector for node details and message stream
+//! - Central map with obstacles, nodes, optional IDs, and radio pulse indicators
+//!
+//! The UI exchanges state with the network task via two bounded channels:
+//! `UIRefreshChannel` (network → UI) and `UICommandChannel` (UI → network).
+
 use eframe::egui;
 use egui::Color32;
 use embassy_executor::{Executor, Spawner};
@@ -826,7 +836,7 @@ impl eframe::App for AppState {
                 }
             }
 
-            // Draw points scaled into rect
+            // Draw nodes scaled into rect
             let radius = 4.0;
             for (i, p) in self.nodes.iter().enumerate() {
                 let pos = egui::pos2(
@@ -881,7 +891,7 @@ impl eframe::App for AppState {
                 }
             }
 
-            // Handle selection
+            // Handle selection by nearest node (squared-distance comparison)
             if response.clicked() {
                 if let Some(click_pos) = response.interact_pointer_pos() {
                     let mut best: Option<(usize, f32)> = None;

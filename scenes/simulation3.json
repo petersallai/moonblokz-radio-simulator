@@ -23,46 +23,11 @@
     "scoring_matrix": [255, 243, 65, 82, 143]
   },
   "nodes": [
-    {
-      "node_id": 5,
-      "position": {
-        "x": 5000,
-        "y": 5000
-      },
-      "radio_strength": 18
-    },
-    {
-      "node_id": 4,
-      "position": {
-        "x": 6000,
-        "y": 6000
-      },
-      "radio_strength": 14
-    },
-    {
-      "node_id": 1,
-      "position": {
-        "x": 4000,
-        "y": 4000
-      },
-      "radio_strength": 14
-    },
-    {
-      "node_id": 3,
-      "position": {
-        "x": 4000,
-        "y": 6000
-      },
-      "radio_strength": 14
-    },
-    {
-      "node_id": 2,
-      "position": {
-        "x": 6000,
-        "y": 4000
-      },
-      "radio_strength": 14
-    }
-],
+    {"node_id": 5, "position": {"x": 5000, "y": 5000}, "radio_strength": 18},
+    {"node_id": 4, "position": {"x": 6000, "y": 6000}, "radio_strength": 14},
+    {"node_id": 1, "position": {"x": 4000, "y": 4000}, "radio_strength": 14},
+    {"node_id": 3, "position": {"x": 4000, "y": 6000}, "radio_strength": 16},
+    {"node_id": 2, "position": {"x": 6000, "y": 4000}, "radio_strength": 14}
+  ],
   "obstacles": []
 }
