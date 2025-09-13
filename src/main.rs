@@ -838,7 +838,7 @@ impl eframe::App for AppState {
 
             // Draw nodes scaled into rect
             let radius = 4.0;
-            for (i, p) in self.nodes.iter().enumerate() {
+            for (_i, p) in self.nodes.iter().enumerate() {
                 let pos = egui::pos2(
                     egui::lerp(rect.left()..=rect.right(), p.position.x as f32 / 10000f32),
                     egui::lerp(rect.top()..=rect.bottom(), p.position.y as f32 / 10000f32),
@@ -850,17 +850,7 @@ impl eframe::App for AppState {
                     color = Color32::from_rgb(0, 255, 0); // Green if reached in current measurement
                 }
 
-                if self.selected == Some(i) {
-                    let scale_x = rect.width() / 10000.0;
-                    let scale_y = rect.height() / 10000.0;
-                    let units_to_pixels = scale_x.min(scale_y);
-                    let radius = p.radio_strength as f32 * units_to_pixels;
-                    painter.circle_filled(pos, radius, Color32::from_rgba_unmultiplied(0, 128, 255, 50));
-                    color = Color32::from_rgb(0, 128, 255);
-                }
-
                 painter.circle_filled(pos, radius, color);
-
                 // Optional ID label next to each node
                 if self.show_node_ids {
                     let label_pos = egui::pos2(pos.x + 6.0, pos.y - 6.0);
@@ -891,6 +881,20 @@ impl eframe::App for AppState {
                 }
             }
 
+            if let Some(selected) = self.selected {
+                let selected_node = &self.nodes[selected];
+                let pos = egui::pos2(
+                    egui::lerp(rect.left()..=rect.right(), selected_node.position.x as f32 / 10000f32),
+                    egui::lerp(rect.top()..=rect.bottom(), selected_node.position.y as f32 / 10000f32),
+                );
+
+                let scale_x = rect.width() / 10000.0;
+                let scale_y = rect.height() / 10000.0;
+                let units_to_pixels = scale_x.min(scale_y);
+                let radius = selected_node.radio_strength as f32 * units_to_pixels;
+                painter.circle_filled(pos, radius, Color32::from_rgba_unmultiplied(0, 128, 255, 50));
+            }
+
             // Handle selection by nearest node (squared-distance comparison)
             if response.clicked() {
                 if let Some(click_pos) = response.interact_pointer_pos() {
@@ -917,7 +921,6 @@ impl eframe::App for AppState {
                     }
                 }
             }
-            // Draw obstacles
         });
     }
 }
