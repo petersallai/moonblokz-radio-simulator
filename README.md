@@ -1,6 +1,6 @@
 # MoonBlokz Radio Simulator
 
-GUI-based, interactive radio network simulator that drives and visualizes a multi-node system using moonblokz-radio-lib. It renders a 2D map with nodes and obstacles, simulates radio propagation and collisions, and lets you observe throughput, link quality, and distribution metrics in real time. A scalable virtual-time driver enables accelerated or slowed simulations without timer bursts or stalls.
+GUI-based, interactive radio network simulator that drives and visualizes a multi-node system using moonblokz-radio-lib. This application can run the same radio logic as the embedded nodes. The simulator renders a 2D map with nodes and obstacles, simulates radio propagation and collisions, and lets you observe throughput, link quality, and distribution metrics in real time. A scalable virtual-time driver enables accelerated or slowed simulations without timer bursts or stalls.
 
 ## What you get
 
@@ -111,7 +111,7 @@ The simulator is composed of four core modules:
 	- Builds the egui interface and owns the UI state.
 	- Spawns an Embassy executor on a background thread and bridges UI↔network via bounded channels.
 - src/network.rs (simulation core)
-	- Loads the scene, spawns one async node task per node, and runs the central event loop.
+	- Loads the scene, spawns one async node task per node, and runs the central simulation loop.
 	- Maintains per-node message ring buffers and processes CAD/airtime windows.
 	- Selects receivers by range and line-of-sight; computes SINR/collisions and delivers RX.
 - src/signal_calculations.rs (radio/geometry math)
@@ -156,7 +156,7 @@ Notes:
 - Build and test
 	- The crate includes unit tests for time mapping, geometry, and radio timing/math.
 - Key conventions
-	- World coordinates: 0..10000 on both axes; UI maps these to the current viewport.
+	- World coordinates: 0..10000 meters on both axes; UI maps these to the current viewport.
 	- Power units: dBm/mW; time units: embassy::Duration or seconds (math only).
 
 ## License
