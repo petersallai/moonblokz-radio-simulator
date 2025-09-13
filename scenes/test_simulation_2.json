@@ -19,7 +19,7 @@
     "echo_request_minimal_interval": 200,
     "echo_messages_target_interval": 100,
     "echo_gathering_timeout": 1,
-    "relay_position_delay": 5,
+    "relay_position_delay": 13,
     "scoring_matrix": [255, 243, 65, 82, 143]
   },
   "nodes": [

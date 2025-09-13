@@ -1,6 +1,10 @@
 # MoonBlokz Radio Simulator
 
-GUI-based, interactive radio network simulator that drives and visualizes a multi-node system using [moonblokz-radio-lib](https://github.com/petersallai/moonblokz-radio-lib). This application can run the same radio logic as the embedded nodes. The simulator renders a 2D map with nodes and obstacles, simulates radio propagation and collisions, and lets you observe throughput, link quality, and distribution metrics in real time. A scalable virtual-time driver enables accelerated or slowed simulations without timer bursts or stalls.
+GUI-based, interactive radio network simulator that drives and visualizes a multi-node system using [moonblokz-radio-lib](https://github.com/petersallai/moonblokz-radio-lib). This library is specifically designed to meet the needs of the MoonBlokz blockchain, which is tailored for radio communication and microcontrollers [https://www.moonblokz.com](https://www.moonblokz.com). 
+
+Comprehensive details about MoonBlokz can be found in the [MoonBlokz article series](https://medium.com/@peter.sallai/moonblokz-series-part-i-building-a-hyper-local-blockchain-2f385b763c65). Part VII of the series discusses the radio communication topic.
+
+application can run the same radio logic as the embedded nodes. The simulator renders a 2D map with nodes and obstacles, simulates radio propagation and collisions, and lets you observe throughput, link quality, and distribution metrics in real time. A scalable virtual-time driver enables accelerated or slowed simulations without timer bursts or stalls.
 
 ![App screenshot](docs/images/screenshot1.png)
 
