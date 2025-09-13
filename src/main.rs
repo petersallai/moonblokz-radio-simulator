@@ -108,6 +108,8 @@ struct AppState {
     measurement_total_message_count: u32,
     poor_limit: u8,
     excellent_limit: u8,
+    // Map options
+    show_node_ids: bool,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -153,6 +155,7 @@ impl AppState {
             measurement_total_message_count: 0,
             poor_limit: 0,
             excellent_limit: 0,
+            show_node_ids: false,
         }
     }
 }
@@ -485,6 +488,11 @@ impl eframe::App for AppState {
                     if ui.button("Reset").clicked() {
                         self.speed_percent = 100;
                         crate::time_driver::set_simulation_speed_percent(self.speed_percent);
+                    }
+                    ui.separator();
+                    let mut show_ids = self.show_node_ids;
+                    if ui.checkbox(&mut show_ids, "Show node IDs").changed() {
+                        self.show_node_ids = show_ids;
                     }
                     if self.simulation_delay > 10 {
                         ui.separator();
@@ -839,6 +847,18 @@ impl eframe::App for AppState {
                 }
 
                 painter.circle_filled(pos, radius, color);
+
+                // Optional ID label next to each node
+                if self.show_node_ids {
+                    let label_pos = egui::pos2(pos.x + 6.0, pos.y - 6.0);
+                    painter.text(
+                        label_pos,
+                        egui::Align2::LEFT_BOTTOM,
+                        format!("#{}", p.node_id),
+                        egui::FontId::monospace(12.0),
+                        ui.visuals().text_color(),
+                    );
+                }
 
                 // Draw radio transfer indicator
                 if let Some((expiry, message_type, distance)) = self.node_radio_transfer_indicators.get(&p.node_id) {
