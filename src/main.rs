@@ -645,7 +645,7 @@ impl eframe::App for AppState {
                                         .column(Column::initial(50.0).at_least(40.0)) // Link Quality
                                         .header(row_height, |mut header| {
                                             header.col(|ui| {
-                                                ui.strong("TS");
+                                                ui.strong("Time");
                                             });
                                             header.col(|ui| {
                                                 ui.strong("From");

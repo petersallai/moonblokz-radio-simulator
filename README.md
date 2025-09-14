@@ -1,6 +1,8 @@
 # MoonBlokz Radio Simulator
 
-GUI-based, interactive radio network simulator that drives and visualizes a multi-node system using [moonblokz-radio-lib](https://github.com/petersallai/moonblokz-radio-lib). This library is specifically designed to meet the needs of the MoonBlokz blockchain, which is tailored for radio communication and microcontrollers [https://www.moonblokz.com](https://www.moonblokz.com).
+MoonBlokz is a Decentralized Physical Infrastructure Network (DePIN) system optimized for microcontrollers and radio communication, operating independently of any central infrastructure. [https://www.moonblokz.com](https://www.moonblokz.com).
+
+This application is a GUI-based, interactive radio network simulator that drives and visualizes a multi-node system using [moonblokz-radio-lib](https://github.com/petersallai/moonblokz-radio-lib).
 
 Comprehensive details about MoonBlokz can be found in the [MoonBlokz article series](https://medium.com/@peter.sallai/moonblokz-series-part-i-building-a-hyper-local-blockchain-2f385b763c65). Part VII of the series discusses the radio communication topic.
 
