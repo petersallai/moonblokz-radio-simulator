@@ -1,6 +1,6 @@
 # TODO items
 
 - Generate multiple test maps
-- Dynamic size handling
+- Dynamic map size handling
 - Random timed repeating measurement
 - Send message functionality
