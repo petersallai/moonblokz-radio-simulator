@@ -14,13 +14,14 @@
     "low_data_rate_optimization": false
   },
     "radio_module_config": {
-    "delay_between_tx_packets": 1,
+    "delay_between_tx_packets": 200,
     "delay_between_tx_messages": 10,
     "echo_request_minimal_interval": 200,
     "echo_messages_target_interval": 100,
     "echo_gathering_timeout": 1,
     "relay_position_delay": 20,
-    "scoring_matrix": [255, 243, 65, 82, 143]
+    "scoring_matrix": [255, 243, 65, 82, 143],
+    "retry_interval_for_missing_packets": 60
   },
   "nodes": [
     {

@@ -14,7 +14,7 @@
     "low_data_rate_optimization": false
   },
   "radio_module_config": {
-    "delay_between_tx_packets": 10,
+    "delay_between_tx_packets": 200,
     "delay_between_tx_messages": 10,
     "echo_request_minimal_interval": 1000,
     "echo_messages_target_interval": 50,
@@ -27,7 +27,7 @@
     { "node_id": 2, "position": { "x": 3000, "y": 2000 }, "radio_strength": 14.0 }
   ],
   "obstacles": [
-    { "type": "rectangle", "top-left-position": { "x": 1500, "y": 1500 }, "bottom-right-position": { "x": 2500, "y": 2500 }, "reduction": 0 },
-    { "type": "circle", "center_position": { "x": 5000, "y": 5000 }, "radius": 400, "reduction": 0 }
+    { "type": "rectangle", "top-left-position": { "x": 1500, "y": 1500 }, "bottom-right-position": { "x": 2500, "y": 2500 }},
+    { "type": "circle", "center_position": { "x": 5000, "y": 5000 }, "radius": 400}
   ]
 }

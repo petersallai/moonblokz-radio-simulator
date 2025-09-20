@@ -81,6 +81,8 @@ pub(crate) fn calculate_receiving_limit_with_basic_noise(lora_parameters: &LoraP
 
 pub(crate) fn calculate_snr_limit(lora_parameters: &LoraParameters) -> f32 {
     let snr_limit = match lora_parameters.spreading_factor {
+        5 => -2.5,
+        6 => -5.0,
         7 => -7.5,
         8 => -10.0,
         9 => -12.5,
@@ -93,7 +95,7 @@ pub(crate) fn calculate_snr_limit(lora_parameters: &LoraParameters) -> f32 {
     return snr_limit;
 }
 
-pub(crate) fn calculate_air_time(lora_parameters: LoraParameters, payload_size: usize) -> f32 {
+pub(crate) fn calculate_air_time(lora_parameters: &LoraParameters, payload_size: usize) -> f32 {
     // LoRa symbol time in seconds: T_sym = 2^SF / BW
     let symbol_time = 2.0_f32.powi(lora_parameters.spreading_factor as i32) / lora_parameters.bandwidth as f32;
 
@@ -192,12 +194,12 @@ mod tests {
     #[test]
     fn airtime_increases_with_payload_and_sf() {
         let mut lp = params_sf_bw(7, 125_000);
-        let t_small = calculate_air_time(lp.clone(), 10);
-        let t_big = calculate_air_time(lp.clone(), 100);
+        let t_small = calculate_air_time(&lp, 10);
+        let t_big = calculate_air_time(&lp, 100);
         assert!(t_big > t_small);
 
         lp.spreading_factor = 9;
-        let t_sf9 = calculate_air_time(lp, 10);
+        let t_sf9 = calculate_air_time(&lp, 10);
         assert!(t_sf9 > t_small);
     }
 

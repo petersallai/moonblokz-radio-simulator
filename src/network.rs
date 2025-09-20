@@ -252,7 +252,7 @@ mod tests {
 #[derive(Deserialize, Clone)]
 struct RadioModuleConfig {
     /// Inter-packet gap inside a single message (ms) used by the TX scheduler.
-    delay_between_tx_packets: u8,
+    delay_between_tx_packets: u16,
     /// Delay between separate messages initiated by the manager (ms).
     delay_between_tx_messages: u8,
     /// Minimum spacing between echo requests (ms).
@@ -265,6 +265,8 @@ struct RadioModuleConfig {
     relay_position_delay: u8,
     /// Encoded scoring matrix thresholds (see `ScoringMatrix::new_from_encoded`).
     scoring_matrix: [u8; 5],
+    /// Interval (ms) between retries for missing packets in a multi-packet message.
+    retry_interval_for_missing_packets: u8,
 }
 
 enum NodeOutputPayload {
@@ -497,6 +499,7 @@ async fn node_task(spawner: Spawner, radio_module_config: RadioModuleConfig, nod
         echo_gathering_timeout: radio_module_config.echo_gathering_timeout,
         relay_position_delay: radio_module_config.relay_position_delay,
         scoring_matrix: ScoringMatrix::new_from_encoded(&radio_module_config.scoring_matrix),
+        retry_interval_for_missing_packets: radio_module_config.retry_interval_for_missing_packets,
     };
 
     let _ = manager.initialize(radio_config, spawner, radio_device, node_id, node_id as u64);
@@ -737,7 +740,7 @@ pub(crate) async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshChann
                         });
 
                         // Enqueue the transmitter's own airtime window for collision modeling.
-                        let airtime_ms = (calculate_air_time(scene.lora_parameters.clone(), packet.length) * 1000.0) as u64;
+                        let airtime_ms = (calculate_air_time(&scene.lora_parameters, packet.length) * 1000.0) as u64;
                         node.airtime_waiting_packets.push(AirtimeWaitingPacket {
                             packet: packet.clone(),
                             sender_node_id: node_id,
@@ -801,7 +804,7 @@ pub(crate) async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshChann
                                 {
                                     // Compute actual distance only for RSSI calculation (sqrt here).
                                     let distance = distance_from_d2(d2);
-                                    let airtime_ms = (calculate_air_time(scene.lora_parameters.clone(), packet.length) * 1000.0) as u64;
+                                    let airtime_ms = (calculate_air_time(&scene.lora_parameters, packet.length) * 1000.0) as u64;
                                     target_node.airtime_waiting_packets.push(AirtimeWaitingPacket {
                                         packet: packet.clone(),
                                         sender_node_id: node_id,
@@ -922,6 +925,18 @@ pub(crate) async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshChann
                                 for packet in &node.airtime_waiting_packets {
                                     if packet.start_time < cad_waiting_item.end_time && packet.start_time + packet.airtime > cad_waiting_item.start_time {
                                         activity = true;
+
+                                        log::debug!(
+                                            "CAD detected packet.start_time={:?}, packet.end_time={:?}, cad.start_time={:?}, cad.end_time={:?} (node {}, sender {}, rssi {:.1} dBm)",
+                                            packet.start_time.as_millis(),
+                                            (packet.start_time + packet.airtime).as_millis(),
+                                            cad_waiting_item.start_time.as_millis(),
+                                            cad_waiting_item.end_time.as_millis(),
+                                            node.node_id,
+                                            packet.sender_node_id,
+                                            packet.rssi
+                                        );
+
                                         break;
                                     }
                                 }

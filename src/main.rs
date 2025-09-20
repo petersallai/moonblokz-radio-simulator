@@ -490,15 +490,17 @@ impl eframe::App for AppState {
                             crate::time_driver::set_simulation_speed_percent(self.speed_percent);
                         }
                     });
-                    let mut auto = self.auto_speed_enabled;
-                    if ui.checkbox(&mut auto, "Auto speed").changed() {
-                        self.auto_speed_enabled = auto;
-                        let _ = self.ui_command_tx.try_send(UICommand::SetAutoSpeed(self.auto_speed_enabled));
-                    }
-                    if ui.button("Reset").clicked() {
-                        self.speed_percent = 100;
-                        crate::time_driver::set_simulation_speed_percent(self.speed_percent);
-                    }
+                    ui.horizontal(|ui| {
+                        let mut auto = self.auto_speed_enabled;
+                        if ui.checkbox(&mut auto, "Auto speed").changed() {
+                            self.auto_speed_enabled = auto;
+                            let _ = self.ui_command_tx.try_send(UICommand::SetAutoSpeed(self.auto_speed_enabled));
+                        }
+                        if ui.button("Reset").clicked() {
+                            self.speed_percent = 100;
+                            crate::time_driver::set_simulation_speed_percent(self.speed_percent);
+                        }
+                    });
                     ui.separator();
                     let mut show_ids = self.show_node_ids;
                     if ui.checkbox(&mut show_ids, "Show node IDs").changed() {

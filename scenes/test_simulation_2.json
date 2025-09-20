@@ -6,21 +6,22 @@
     "noise_floor": -117.0
   },
   "lora_parameters": {
-    "bandwidth": 125000,
+    "bandwidth": 250000,
     "spreading_factor": 7,
-    "coding_rate": 4,
+    "coding_rate": 1,
     "preamble_symbols": 8.0,
     "crc_enabled": true,
     "low_data_rate_optimization": false
   },
     "radio_module_config": {
-    "delay_between_tx_packets": 1,
-    "delay_between_tx_messages": 10,
+    "delay_between_tx_packets": 200,
+    "delay_between_tx_messages": 5,
     "echo_request_minimal_interval": 200,
     "echo_messages_target_interval": 100,
     "echo_gathering_timeout": 1,
-    "relay_position_delay": 13,
-    "scoring_matrix": [255, 243, 65, 82, 143]
+    "relay_position_delay": 5,
+    "scoring_matrix": [255, 243, 65, 123, 47],
+    "retry_interval_for_missing_packets": 60
   },
   "nodes": [
     {
@@ -828,8 +829,7 @@
     {
       "type": "rectangle",
       "top-left-position": { "x": 5380, "y": 5000 },
-      "bottom-right-position": { "x": 5430, "y": 9000 },
-      "reduction": 15
+      "bottom-right-position": { "x": 5430, "y": 9000 }
     }
 
   ]
