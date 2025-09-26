@@ -5,3 +5,4 @@
 - Random timed repeating measurement
 - Send message functionality
 - Moving node handling
+- Hancle processing delay
