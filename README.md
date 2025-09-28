@@ -64,7 +64,8 @@ The simulator loads a “Scene” JSON describing the environment and nodes.
   - echo_messages_target_interval (u8)
   - echo_gathering_timeout (u8)
   - relay_position_delay (u8)
-  - scoring_matrix ([u8; 5]) — passed to moonblokz-radio-lib
+  - scoring_matrix ([u8; 5]) 
+  - retry_interval_for_missing_packets (u16)
 - nodes: array of
   - node_id (u32)
   - position { x: u32, y: u32 } in 0..10000 world units
@@ -98,7 +99,8 @@ Minimal example:
     "echo_messages_target_interval": 50,
     "echo_gathering_timeout": 10,
     "relay_position_delay": 0,
-    "scoring_matrix": [255, 243, 65, 82, 143]
+    "scoring_matrix": [255, 243, 65, 82, 143],
+    "retry_interval_for_missing_packets": 60
   },
   "nodes": [
     { "node_id": 1, "position": { "x": 1000, "y": 1000 }, "radio_strength": 14.0 },
