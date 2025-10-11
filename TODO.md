@@ -3,6 +3,7 @@
 ## Implement this items now
 
 - Generate multiple test maps
+- Add the functionality to work from logs or stream to visualize field testing data
 - Handle processing delay (controllable from UI)
 - Structure refactor:
   - create ui/simulation folders

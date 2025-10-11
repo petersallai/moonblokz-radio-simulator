@@ -60,7 +60,7 @@ The simulator loads a “Scene” JSON describing the environment and nodes.
 - radio_module_config
   - delay_between_tx_packets (u16) - in milliseconds
   - delay_between_tx_messages (u8) - in seconds
-  - echo_request_minimal_interval (u32) 
+  - echo_request_minimal_interval (u16) - in minutes
   - echo_messages_target_interval (u8)
   - echo_gathering_timeout (u8)
   - relay_position_delay (u8)
@@ -95,7 +95,7 @@ Minimal example:
   "radio_module_config": {
     "delay_between_tx_packets": 200,
     "delay_between_tx_messages": 10,
-    "echo_request_minimal_interval": 1000,
+    "echo_request_minimal_interval": 17,
     "echo_messages_target_interval": 50,
     "echo_gathering_timeout": 10,
     "relay_position_delay": 0,

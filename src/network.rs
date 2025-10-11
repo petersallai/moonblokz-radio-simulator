@@ -21,7 +21,7 @@ use embassy_time::{Duration, Instant, Timer};
 use moonblokz_radio_lib::{
     IncomingMessageItem, MAX_NODE_COUNT, MessageType, RADIO_MAX_PACKET_COUNT, RadioCommunicationManager, RadioMessage, RadioPacket, ReceivedPacket,
     ScoringMatrix,
-    radio_device_simulator::{RadioInputQueue, RadioOutputQueue},
+    radio_devices::simulator::{RadioInputQueue, RadioOutputQueue},
 };
 use serde::Deserialize;
 use std::collections::{HashMap, VecDeque};
@@ -256,8 +256,8 @@ struct RadioModuleConfig {
     delay_between_tx_packets: u16,
     /// Delay between separate messages initiated by the manager (ms).
     delay_between_tx_messages: u8,
-    /// Minimum spacing between echo requests (ms).
-    echo_request_minimal_interval: u32,
+    /// Minimum spacing between echo requests (minutes).
+    echo_request_minimal_interval: u16,
     /// Target interval (ms) for echo messages.
     echo_messages_target_interval: u8,
     /// Timeout (ms) for collecting echo messages.
@@ -268,6 +268,8 @@ struct RadioModuleConfig {
     scoring_matrix: [u8; 5],
     /// Interval (ms) between retries for missing packets in a multi-packet message.
     retry_interval_for_missing_packets: u8,
+    /// Maximum random delay in milliseconds added to transmission timing
+    pub tx_maximum_random_delay: u16,
 }
 
 enum NodeOutputPayload {
@@ -489,7 +491,7 @@ async fn node_task(spawner: Spawner, radio_module_config: RadioModuleConfig, nod
 
     let radio_output_queue_receiver = radio_output_queue.receiver();
     let radio_input_queue_sender = radio_input_queue.sender();
-    let radio_device = moonblokz_radio_lib::radio_device_simulator::RadioDevice::new(radio_output_queue.sender(), radio_input_queue.receiver());
+    let radio_device = moonblokz_radio_lib::radio_devices::simulator::RadioDevice::with(radio_output_queue.sender(), radio_input_queue.receiver());
     let mut manager = RadioCommunicationManager::new();
 
     let radio_config = moonblokz_radio_lib::RadioConfiguration {
@@ -501,6 +503,7 @@ async fn node_task(spawner: Spawner, radio_module_config: RadioModuleConfig, nod
         relay_position_delay: radio_module_config.relay_position_delay,
         scoring_matrix: ScoringMatrix::new_from_encoded(&radio_module_config.scoring_matrix),
         retry_interval_for_missing_packets: radio_module_config.retry_interval_for_missing_packets,
+        tx_maximum_random_delay: radio_module_config.tx_maximum_random_delay,
     };
 
     let _ = manager.initialize(radio_config, spawner, radio_device, node_id, node_id as u64);
@@ -512,7 +515,7 @@ async fn node_task(spawner: Spawner, radio_module_config: RadioModuleConfig, nod
             Either3::First(res) => {
                 if let Ok(IncomingMessageItem::NewMessage(msg)) = res {
                     if msg.message_type() == MessageType::AddBlock as u8 {
-                        let sequence = u32::from_le_bytes([msg.payload[5], msg.payload[6], msg.payload[7], msg.payload[8]]);
+                        let sequence = u32::from_le_bytes([msg.payload()[5], msg.payload()[6], msg.payload()[7], msg.payload()[8]]);
                         if arrived_messages.contains_key(&sequence) {
                             //duplicate, ignore
                             continue;
@@ -525,7 +528,7 @@ async fn node_task(spawner: Spawner, radio_module_config: RadioModuleConfig, nod
                                 })
                                 .await;
 
-                            manager.report_message_processing_status(moonblokz_radio_lib::MessageProcessingResult::NewBlockAdded(msg.clone()));
+                            let _ = manager.report_message_processing_status(moonblokz_radio_lib::MessageProcessingResult::NewBlockAdded(msg.clone()));
                         }
                     }
 
@@ -568,24 +571,24 @@ async fn node_task(spawner: Spawner, radio_module_config: RadioModuleConfig, nod
             Either3::Second(cmd) => match cmd {
                 NodeInputMessage::SendMessage(msg) => {
                     if msg.message_type() == MessageType::AddBlock as u8 {
-                        let sequence = u32::from_le_bytes([msg.payload[5], msg.payload[6], msg.payload[7], msg.payload[8]]);
+                        let sequence = u32::from_le_bytes([msg.payload()[5], msg.payload()[6], msg.payload()[7], msg.payload()[8]]);
                         arrived_messages.insert(sequence, msg.clone());
                     }
                     let _ = manager.send_message(msg);
                 }
                 NodeInputMessage::RadioTransfer(received_packet) => {
                     radio_input_queue_sender
-                        .send(moonblokz_radio_lib::radio_device_simulator::RadioInputMessage::ReceivePacket(received_packet))
+                        .send(moonblokz_radio_lib::radio_devices::simulator::RadioInputMessage::ReceivePacket(received_packet))
                         .await;
                 }
                 NodeInputMessage::CADResponse(success) => {
                     let _ = radio_input_queue_sender
-                        .send(moonblokz_radio_lib::radio_device_simulator::RadioInputMessage::CADResponse(success))
+                        .send(moonblokz_radio_lib::radio_devices::simulator::RadioInputMessage::CADResponse(success))
                         .await;
                 }
             },
             Either3::Third(packet) => match packet {
-                moonblokz_radio_lib::radio_device_simulator::RadioOutputMessage::SendPacket(packet) => {
+                moonblokz_radio_lib::radio_devices::simulator::RadioOutputMessage::SendPacket(packet) => {
                     out_tx
                         .send(NodeOutputMessage {
                             node_id,
@@ -593,7 +596,7 @@ async fn node_task(spawner: Spawner, radio_module_config: RadioModuleConfig, nod
                         })
                         .await;
                 }
-                moonblokz_radio_lib::radio_device_simulator::RadioOutputMessage::RequestCAD => {
+                moonblokz_radio_lib::radio_devices::simulator::RadioOutputMessage::RequestCAD => {
                     out_tx
                         .send(NodeOutputMessage {
                             node_id,
@@ -880,7 +883,7 @@ pub(crate) async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshChann
                     if let Some(node) = nodes_map.get(&node_id) {
                         if let Some(sender) = &node.node_input_queue_sender {
                             let message_body: [u8; 2000] = [22; 2000];
-                            let message = RadioMessage::new_add_block(node_id, measurement_identifier, &message_body);
+                            let message = RadioMessage::add_block_with(node_id, measurement_identifier, &message_body);
                             let _ = sender.send(NodeInputMessage::SendMessage(message)).await;
                         }
                     }

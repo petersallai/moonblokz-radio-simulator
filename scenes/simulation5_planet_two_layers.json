@@ -16,12 +16,13 @@
   "radio_module_config": {
     "delay_between_tx_packets": 200,
     "delay_between_tx_messages": 5,
-    "echo_request_minimal_interval": 10,
+    "echo_request_minimal_interval": 1,
     "echo_messages_target_interval": 100,
     "echo_gathering_timeout": 1,
     "relay_position_delay": 5,
     "scoring_matrix": [255, 243, 65, 123, 47],
-    "retry_interval_for_missing_packets": 60
+    "retry_interval_for_missing_packets": 60,
+    "tx_maximum_random_delay": 200
   },
   "nodes": [
     { "node_id": 1,  "position": { "x": 8500, "y": 5000 }, "radio_strength": 18 },
