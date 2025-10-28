@@ -12,7 +12,7 @@ use eframe::egui;
 use embassy_executor::{Executor, Spawner};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use env_logger::Builder;
-use log::{LevelFilter, info};
+use log::{error, info, LevelFilter};
 use std::thread;
 
 mod simulation;
@@ -31,6 +31,26 @@ pub type UICommandChannelSender = embassy_sync::channel::Sender<'static, Critica
 
 fn embassy_init(spawner: Spawner, ui_refresh_tx: UIRefreshChannelSender, ui_command_rx: UICommandChannelReceiver) {
     let _ = spawner.spawn(simulation::network_task(spawner, ui_refresh_tx, ui_command_rx));
+}
+
+const APP_ICON_BYTES: &[u8] = include_bytes!("../icons/moonblokz_icon.png");
+
+fn load_app_icon() -> Option<egui::IconData> {
+    match image::load_from_memory(APP_ICON_BYTES) {
+        Ok(img) => {
+            let rgba = img.to_rgba8();
+            let (width, height) = (rgba.width(), rgba.height());
+            Some(egui::IconData {
+                rgba: rgba.into_raw(),
+                width,
+                height,
+            })
+        }
+        Err(err) => {
+            error!("Failed to decode embedded app icon: {err}");
+            None
+        }
+    }
 }
 
 fn main() {
@@ -64,8 +84,12 @@ fn main() {
         .expect("failed to spawn embassy thread");
 
     // Start the GUI on the main thread (required on macOS)
+    let mut viewport = egui::ViewportBuilder::default().with_min_inner_size([1000.0, 800.0]);
+    if let Some(icon) = load_app_icon() {
+        viewport = viewport.with_icon(icon);
+    }
     let native_options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default(),
+        viewport,
         ..Default::default()
     };
     let _ = eframe::run_native(

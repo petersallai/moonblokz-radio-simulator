@@ -6,7 +6,8 @@ edition = "2024"
 [dependencies]
 eframe = { version = "0.27", default-features = false, features = ["wgpu","persistence"] }
 egui = { version = "0.27", features = ["default_fonts"] }
-egui_extras = "0.27"
+egui_extras = { version = "0.27", features = ["image"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 
 embassy-sync = { version = "0.7", features = ["std"] }

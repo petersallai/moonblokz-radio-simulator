@@ -1,10 +1,12 @@
 // UI module for the MoonBlokz Radio Simulator
 //
 // This module organizes the UI into separate components:
+// - `mode_selector`: Initial mode selection screen
 // - `top_panel`: Top metrics and controls panel
 // - `right_panel`: Node inspector and message stream panel
 // - `map`: Central map display with nodes and obstacles
 
+pub mod mode_selector;
 pub mod top_panel;
 pub mod right_panel;
 pub mod map;
@@ -63,6 +65,9 @@ pub struct AppState {
     pub alert: Option<String>,
     pub ui_refresh_rx: crate::UIRefreshChannelReceiver,
     pub ui_command_tx: crate::UICommandChannelSender,
+    // Mode selection
+    pub mode_selector: mode_selector::ModeSelector,
+    pub mode_selected: bool,
     // Map state
     pub selected: Option<usize>,
     pub nodes: Vec<NodeUIState>,
@@ -114,6 +119,8 @@ impl AppState {
             alert: None,
             ui_refresh_rx: rx,
             ui_command_tx: tx,
+            mode_selector: mode_selector::ModeSelector::new(),
+            mode_selected: false,
             selected: None,
             nodes: Vec::new(),
             obstacles: Vec::new(),
@@ -146,6 +153,26 @@ impl AppState {
             show_node_ids: false,
         }
     }
+
+    fn open_file_selector(&mut self) {
+        let mut dialog = rfd::FileDialog::new().add_filter("text", &["json"]);
+        if let Some(dir) = &self.last_open_dir {
+            dialog = dialog.set_directory(dir);
+        }
+        let files = dialog.pick_file();
+        if let Some(file) = files {
+            let _ = self.ui_command_tx.try_send(UICommand::LoadFile(file.to_str().unwrap().to_string()));
+            self.scene_file_selected = true;
+            // Remember directory for next time
+            if let Some(parent) = file.parent() {
+                self.last_open_dir = Some(parent.to_string_lossy().to_string());
+            }
+        } else {
+            // User cancelled the picker; return to mode selection screen
+            self.mode_selected = false;
+            self.scene_file_selected = false;
+        }
+    }
 }
 
 pub fn color_for_message_type(message_type: u8, alpha: f32) -> Color32 {
@@ -172,20 +199,19 @@ impl eframe::App for AppState {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Show mode selector first if mode not yet selected
+        if !self.mode_selected {
+            if let Some(_mode) = self.mode_selector.render(ctx) {
+                self.mode_selected = true;
+                // All modes currently open the file selector
+                self.open_file_selector();
+            }
+            return;
+        }
+
         if !self.scene_file_selected {
-            let mut dialog = rfd::FileDialog::new().add_filter("text", &["json"]);
-            if let Some(dir) = &self.last_open_dir {
-                dialog = dialog.set_directory(dir);
-            }
-            let files = dialog.pick_file();
-            if let Some(file) = files {
-                let _ = self.ui_command_tx.try_send(UICommand::LoadFile(file.to_str().unwrap().to_string()));
-                self.scene_file_selected = true;
-                // Remember directory for next time
-                if let Some(parent) = file.parent() {
-                    self.last_open_dir = Some(parent.to_string_lossy().to_string());
-                }
-            }
+            // File selector dialog is non-blocking, so we just wait for it to complete
+            return;
         }
 
         // Repaint periodically so background updates are visible without input
