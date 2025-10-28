@@ -28,7 +28,8 @@ use std::collections::{HashMap, VecDeque};
 use std::fs;
 
 use crate::{
-    NodeInfo, NodeUIState, UICommand, UICommandChannelReceiver, UIRefreshChannelSender, UIRefreshState,
+    ui::{NodeInfo, NodeUIState, UICommand, UIRefreshState},
+    UICommandChannelReceiver, UIRefreshChannelSender,
     signal_calculations::{
         LoraParameters, PathLossParameters, calculate_air_time, calculate_effective_distance, calculate_rssi, calculate_snr_limit, dbm_to_mw, get_cad_time,
         get_preamble_time, mw_to_dbm,
@@ -176,7 +177,7 @@ pub struct CirclePos {
 /// are conservative with degenerate segment handling.
 #[derive(Debug, Deserialize, Clone)]
 #[serde(tag = "type")]
-pub(crate) enum Obstacle {
+pub enum Obstacle {
     #[serde(rename = "rectangle")]
     Rectangle {
         #[serde(flatten)]
@@ -543,7 +544,7 @@ async fn node_task(spawner: Spawner, radio_module_config: RadioModuleConfig, nod
                                     block_parts[part.packet_index as usize] = true;
                                 }
                                 let mut response_message = message.clone();
-                                response_message.add_packet_list(block_parts);
+                                let _ =response_message.add_packet_list(block_parts);
                                 let _ = manager.report_message_processing_status(moonblokz_radio_lib::MessageProcessingResult::RequestedBlockPartsFound(
                                     response_message,
                                     msg.sender_node_id(),
