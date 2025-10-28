@@ -17,7 +17,7 @@ use std::collections::HashSet;
 use std::time::Duration;
 use std::time::Instant;
 
-use crate::network::{NodeMessage, Obstacle, Point};
+use crate::simulation::{NodeMessage, Obstacle, Point};
 
 pub const NODE_RADIO_TRANSFER_INDICATOR_TIMEOUT: u64 = 1000;
 pub const NODE_RADIO_TRANSFER_INDICATOR_DURATION: Duration = Duration::from_millis(NODE_RADIO_TRANSFER_INDICATOR_TIMEOUT);

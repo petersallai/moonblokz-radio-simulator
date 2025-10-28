@@ -3,7 +3,7 @@
 use eframe::egui;
 use egui::Color32;
 use std::time::Duration;
-use crate::network::Obstacle;
+use crate::simulation::Obstacle;
 use crate::ui::{AppState, UICommand, color_for_message_type, NODE_RADIO_TRANSFER_INDICATOR_TIMEOUT};
 
 pub fn render(ctx: &egui::Context, state: &mut AppState) {

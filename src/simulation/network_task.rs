@@ -1,614 +1,38 @@
-//! Network simulation core.
+//! Central network task driving the simulation timeline and UI updates.
 //!
-//! This module wires the UI with a simulated multi-node radio network backed by
-//! an Embassy executor. It provides:
-//! - Scene loading (nodes, radio/path-loss parameters, obstacles)
-//! - Per-node async tasks that interface with `moonblokz_radio_lib`
-//! - A discrete-time event loop that advances CAD/airtime windows
-//! - Radio reachability checks using line-of-sight against obstacles
-//! - Lightweight performance tunings (ring buffer for messages, squared-distance
-//!   comparisons, cached effective distance)
-//!
-//! The message log per node is maintained as a fixed-capacity ring buffer
-//! (`NODE_MESSAGES_CAPACITY`), surfaced to the UI as a Vec while keeping memory
-//! bounded.
+//! High-level flow each loop tick:
+//! 1) Compute the next "interesting" time (end of any CAD/airtime) and a
+//!    periodic tick deadline (10 ms) to keep the UI responsive.
+//! 2) `select3` waits for: a node event, a UI command, or the next deadline.
+//! 3) On deadlines, evaluate CAD windows, process at most one pending packet
+//!    per node (to preserve order), compute SINR and collisions, and deliver RX.
+//! 4) Adjust simulation speed if auto-speed is enabled based on observed delay.
 
 use anyhow::Context;
 use embassy_executor::Spawner;
 use embassy_futures::select::{Either3, select3};
-use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_time::{Duration, Instant, Timer};
-use moonblokz_radio_lib::{
-    IncomingMessageItem, MAX_NODE_COUNT, MessageType, RADIO_MAX_PACKET_COUNT, RadioCommunicationManager, RadioMessage, RadioPacket, ReceivedPacket,
-    ScoringMatrix,
-    radio_devices::simulator::{RadioInputQueue, RadioOutputQueue},
-};
-use serde::Deserialize;
+use moonblokz_radio_lib::{MessageType, RadioMessage, ScoringMatrix};
 use std::collections::{HashMap, VecDeque};
 use std::fs;
 
 use crate::{
     ui::{NodeInfo, NodeUIState, UICommand, UIRefreshState},
     UICommandChannelReceiver, UIRefreshChannelSender,
-    signal_calculations::{
-        LoraParameters, PathLossParameters, calculate_air_time, calculate_effective_distance, calculate_rssi, calculate_snr_limit, dbm_to_mw, get_cad_time,
-        get_preamble_time, mw_to_dbm,
-    },
     time_driver,
 };
 
-/// Minimum RSSI dominance (dB) for the capture effect to destroy a later
-/// overlapping packet. If the in-progress packet is stronger by this margin,
-/// the overlapping (later-starting) one is treated as destructively colliding.
-///
-/// Note: This is a simplification; real capture behavior depends on timing,
-/// coding/interleaving, and receiver implementation.
-const CAPTURE_THRESHOLD: f32 = 6.0;
-
-/// Depth of the per-node control channel (UI→node manager inputs).
-/// Small to avoid unbounded buffering while allowing modest burstiness.
-const NODE_INPUT_QUEUE_SIZE: usize = 10;
-/// Bounded channel used to send control messages to a node's manager.
-type NodeInputQueue = embassy_sync::channel::Channel<CriticalSectionRawMutex, NodeInputMessage, NODE_INPUT_QUEUE_SIZE>;
-/// Receiver side of the node input channel.
-type NodeInputQueueReceiver = embassy_sync::channel::Receiver<'static, CriticalSectionRawMutex, NodeInputMessage, NODE_INPUT_QUEUE_SIZE>;
-/// Sender side of the node input channel.
-type NodeInputQueueSender = embassy_sync::channel::Sender<'static, CriticalSectionRawMutex, NodeInputMessage, NODE_INPUT_QUEUE_SIZE>;
-
-/// Depth of the global output channel (nodes→network task). Also intentionally
-/// small; higher volumes are aggregated and handled by the network loop.
-const NODES_OUTPUT_BUFFER_CAPACITY: usize = 10;
-/// Bounded channel used by node tasks to publish events for the network task.
-type NodesOutputQueue = embassy_sync::channel::Channel<CriticalSectionRawMutex, NodeOutputMessage, NODES_OUTPUT_BUFFER_CAPACITY>;
-/// Sender side of the nodes output channel.
-type NodesOutputQueueSender = embassy_sync::channel::Sender<'static, CriticalSectionRawMutex, NodeOutputMessage, NODES_OUTPUT_BUFFER_CAPACITY>;
-
-/// Root structure representing the entire scene
-#[derive(Deserialize)]
-struct Scene {
-    /// Path loss model parameters for the physical layer.
-    path_loss_parameters: PathLossParameters,
-    /// LoRa-like parameters for airtime/SNR limit and symbol timings.
-    lora_parameters: LoraParameters,
-    /// Module-level configuration for the simulated radio manager.
-    radio_module_config: RadioModuleConfig,
-    /// All nodes present in the scene (positions and radios).
-    nodes: Vec<Node>,
-    /// Static obstacles used to determine line-of-sight.
-    obstacles: Vec<Obstacle>,
-}
-
-#[derive(Debug, Clone)]
-pub struct NodeMessage {
-    /// Virtual timestamp when the event was recorded.
-    pub timestamp: embassy_time::Instant,
-    /// Encoded message type (matches `moonblokz_radio_lib::MessageType` values).
-    pub message_type: u8,
-    /// Total packet payload size (bytes).
-    pub packet_size: usize,
-    /// Total number of packets in the message.
-    pub packet_count: u8,
-    /// Zero-based packet index within the message sequence.
-    pub packet_index: u8,
-    /// Sender node ID. If equals this node's ID, the message was sent by self.
-    pub sender_node: u32,
-    /// Computed link quality for received packets; '-' (ignored) for self.
-    pub link_quality: u8,
-    /// Whether this event represents a detected collision.
-    pub collision: bool,
-}
-
-#[derive(Clone)]
-pub struct AirtimeWaitingPacket {
-    /// The packet payload to be delivered upon successful reception.
-    packet: RadioPacket,
-    /// Sender node ID of the packet.
-    sender_node_id: u32,
-    /// The time transmission started at the sender.
-    start_time: Instant,
-    /// Simulated on-air time of this packet.
-    airtime: Duration,
-    /// Whether this packet has already been evaluated/processed in the event loop.
-    processed: bool,
-    /// Received signal strength (dBm) at the receiver location (includes path loss).
-    rssi: f32,
-}
-
-#[derive(Clone)]
-pub struct CadItem {
-    /// CAD start time at this receiver.
-    start_time: Instant,
-    /// CAD end time at this receiver.
-    end_time: Instant,
-}
-
-/// Node structure with position and radio strength
-///
-/// Runtime-only fields are skipped from serde and initialized at scene load:
-/// - `node_messages`: bounded ring buffer to avoid unbounded memory use.
-/// - `airtime_waiting_packets` and `cad_waiting_list`: event queues processed
-///   by `network_task`.
-/// - `cached_effective_distance`: per-node cache to avoid recomputing the same
-///   range value for each candidate receiver.
-#[derive(Deserialize, Clone)]
-struct Node {
-    node_id: u32,
-    position: Point,
-    radio_strength: f32,
-    #[serde(skip)]
-    node_input_queue_sender: Option<NodeInputQueueSender>,
-    #[serde(skip)]
-    node_messages: VecDeque<NodeMessage>,
-    #[serde(skip)]
-    airtime_waiting_packets: Vec<AirtimeWaitingPacket>,
-    #[serde(skip)]
-    cad_waiting_list: Vec<CadItem>,
-    #[serde(skip)]
-    cached_effective_distance: f32,
-}
-
-/// Simple 2D point
-#[derive(Debug, Deserialize, Clone)]
-pub struct Point {
-    pub x: u32,
-    pub y: u32,
-}
-
-/// Rectangle position with two corners
-#[derive(Debug, Deserialize, Clone)]
-pub struct RectPos {
-    #[serde(rename = "top-left-position")]
-    pub top_left: Point,
-    #[serde(rename = "bottom-right-position")]
-    pub bottom_right: Point,
-}
-
-/// Circle position defined by its center
-#[derive(Debug, Deserialize, Clone)]
-pub struct CirclePos {
-    #[serde(rename = "center_position")]
-    pub center: Point,
-    pub radius: u32,
-}
-
-/// Obstacles represented as tagged enum
-/// Obstacles expressed in world coordinates (0..=10000 for both axes). Rectangles
-/// are defined by two corners; circles by center and radius. Intersection checks
-/// are conservative with degenerate segment handling.
-#[derive(Debug, Deserialize, Clone)]
-#[serde(tag = "type")]
-pub enum Obstacle {
-    #[serde(rename = "rectangle")]
-    Rectangle {
-        #[serde(flatten)]
-        position: RectPos,
-    },
-    #[serde(rename = "circle")]
-    Circle {
-        #[serde(flatten)]
-        position: CirclePos,
-    },
-}
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn p(x: u32, y: u32) -> Point {
-        Point { x, y }
-    }
-
-    #[test]
-    fn geometry_point_in_rect_and_circle() {
-        let rect = RectPos {
-            top_left: p(10, 10),
-            bottom_right: p(20, 20),
-        };
-        assert!(super::point_in_rect(&p(10, 10), &rect));
-        assert!(super::point_in_rect(&p(15, 15), &rect));
-        assert!(super::point_in_rect(&p(20, 20), &rect));
-        assert!(!super::point_in_rect(&p(9, 10), &rect));
-
-        let circle = CirclePos { center: p(50, 50), radius: 10 };
-        assert!(super::point_in_circle(&p(50, 50), &circle));
-        assert!(super::point_in_circle(&p(60, 50), &circle));
-        assert!(!super::point_in_circle(&p(61, 50), &circle));
-    }
-
-    #[test]
-    fn geometry_segments_intersect_basic_cases() {
-        let a = p(0, 0);
-        let b = p(10, 10);
-        let c = p(0, 10);
-        let d = p(10, 0);
-        assert!(super::segments_intersect(&a, &b, &c, &d));
-
-        // Collinear overlap
-        let e = p(0, 0);
-        let f = p(10, 0);
-        let g = p(5, 0);
-        let h = p(15, 0);
-        assert!(super::segments_intersect(&e, &f, &g, &h));
-
-        // Disjoint
-        let i = p(0, 0);
-        let j = p(1, 1);
-        let k = p(2, 2);
-        let l = p(3, 3);
-        assert!(!super::segments_intersect(&i, &j, &k, &l));
-    }
-
-    #[test]
-    fn is_intersect_handles_degenerate_segment() {
-        let obstacles = vec![Obstacle::Rectangle {
-            position: RectPos {
-                top_left: p(0, 0),
-                bottom_right: p(10, 10),
-            },
-        }];
-        // Point inside rectangle → considered intersecting
-        assert!(super::is_intersect(&p(5, 5), &p(5, 5), &obstacles));
-        // Point outside → not intersecting
-        assert!(!super::is_intersect(&p(20, 20), &p(20, 20), &obstacles));
-    }
-}
-#[derive(Deserialize, Clone)]
-struct RadioModuleConfig {
-    /// Inter-packet gap inside a single message (ms) used by the TX scheduler.
-    delay_between_tx_packets: u16,
-    /// Delay between separate messages initiated by the manager (ms).
-    delay_between_tx_messages: u8,
-    /// Minimum spacing between echo requests (minutes).
-    echo_request_minimal_interval: u16,
-    /// Target interval (ms) for echo messages.
-    echo_messages_target_interval: u8,
-    /// Timeout (ms) for collecting echo messages.
-    echo_gathering_timeout: u8,
-    /// Artificial delay (ms) before relaying position reports.
-    relay_position_delay: u8,
-    /// Encoded scoring matrix thresholds (see `ScoringMatrix::new_from_encoded`).
-    scoring_matrix: [u8; 5],
-    /// Interval (ms) between retries for missing packets in a multi-packet message.
-    retry_interval_for_missing_packets: u8,
-    /// Maximum random delay in milliseconds added to transmission timing
-    pub tx_maximum_random_delay: u16,
-}
-
-enum NodeOutputPayload {
-    /// Node emitted a packet over the simulated radio.
-    RadioTransfer(RadioPacket),
-    /// Node received a high-level `RadioMessage` from the stack.
-    MessageReceived(RadioMessage),
-    /// Node requests a channel activity detection operation window.
-    RequestCAD,
-    /// A node reached during a measurement (by sequence/measurement ID).
-    NodeReachedInMeasurement(u32), // measurement ID
-}
-
-/// Envelope for events emitted by node tasks into the network loop.
-struct NodeOutputMessage {
-    node_id: u32,
-    payload: NodeOutputPayload,
-}
-
-enum NodeInputMessage {
-    /// Deliver a low-level radio packet to a node's RX path.
-    RadioTransfer(ReceivedPacket),
-    /// Ask a node to send a higher-level message (encodes into packets).
-    SendMessage(RadioMessage),
-    /// Respond to a CAD request indicating whether any activity was present.
-    CADResponse(bool),
-}
-
-// Max messages retained per node (ring buffer)
-/// Maximum message history per node (ring buffer). Bounded to keep UI/memory predictable.
-const NODE_MESSAGES_CAPACITY: usize = 1000;
-
-/// Squared Euclidean distance in world units (avoids a sqrt in hot paths).
-fn distance2(a: &Point, b: &Point) -> f32 {
-    let dx = a.x as f32 - b.x as f32;
-    let dy = a.y as f32 - b.y as f32;
-    dx * dx + dy * dy
-}
-
-/// Convert squared distance back to distance (only when needed for RSSI calc).
-fn distance_from_d2(d2: f32) -> f32 {
-    d2.sqrt()
-}
-
-impl Node {
-    /// Push a message into this node's bounded history, popping the oldest if
-    /// at capacity.
-    fn push_message(&mut self, msg: NodeMessage) {
-        if self.node_messages.len() >= NODE_MESSAGES_CAPACITY {
-            self.node_messages.pop_front();
-        }
-        self.node_messages.push_back(msg);
-    }
-}
-
-/// Check if a straight line between two points intersects any obstacle.
-/// Degenerate segments (point==point) are treated as a point-inside-obstacle test.
-fn is_intersect(point1: &Point, point2: &Point, obstacles: &[Obstacle]) -> bool {
-    // Early out if degenerate segment
-    if point1.x == point2.x && point1.y == point2.y {
-        // Treat as a point: intersects if the point is inside any obstacle
-        for obs in obstacles {
-            match obs {
-                Obstacle::Rectangle { position, .. } => {
-                    if point_in_rect(point1, &position) {
-                        return true;
-                    }
-                }
-                Obstacle::Circle { position, .. } => {
-                    if point_in_circle(point1, &position) {
-                        return true;
-                    }
-                }
-            }
-        }
-        return false;
-    }
-
-    for obs in obstacles {
-        match obs {
-            Obstacle::Rectangle { position, .. } => {
-                if segment_intersects_rect(point1, point2, &position) {
-                    return true;
-                }
-            }
-            Obstacle::Circle { position, .. } => {
-                if segment_intersects_circle(point1, point2, &position) {
-                    return true;
-                }
-            }
-        }
-    }
-    false
-}
-
-// ---------- Geometry helpers ----------
-
-/// Normalize rectangle corners to (left,right,top,bottom) tuple.
-fn rect_bounds(rect: &RectPos) -> (u32, u32, u32, u32) {
-    let left = rect.top_left.x.min(rect.bottom_right.x);
-    let right = rect.top_left.x.max(rect.bottom_right.x);
-    let top = rect.top_left.y.min(rect.bottom_right.y);
-    let bottom = rect.top_left.y.max(rect.bottom_right.y);
-    (left, right, top, bottom)
-}
-
-/// Inclusive point-in-rectangle test.
-fn point_in_rect(p: &Point, rect: &RectPos) -> bool {
-    let (left, right, top, bottom) = rect_bounds(rect);
-    p.x >= left && p.x <= right && p.y >= top && p.y <= bottom
-}
-
-/// Point-inside-circle test using integer-safe math internally.
-fn point_in_circle(p: &Point, circle: &CirclePos) -> bool {
-    let dx = p.x as i64 - circle.center.x as i64;
-    let dy = p.y as i64 - circle.center.y as i64;
-    let r2 = (circle.radius as i64) * (circle.radius as i64);
-    dx * dx + dy * dy <= r2
-}
-
-/// Segment vs. axis-aligned rectangle intersection test.
-fn segment_intersects_rect(p1: &Point, p2: &Point, rect: &RectPos) -> bool {
-    // Inside check
-    if point_in_rect(p1, rect) || point_in_rect(p2, rect) {
-        return true;
-    }
-
-    let (left, right, top, bottom) = rect_bounds(rect);
-    let lt = Point { x: left, y: top };
-    let rt = Point { x: right, y: top };
-    let rb = Point { x: right, y: bottom };
-    let lb = Point { x: left, y: bottom };
-
-    // Check segment against each rectangle edge
-    segments_intersect(p1, p2, &lt, &rt) || segments_intersect(p1, p2, &rt, &rb) || segments_intersect(p1, p2, &rb, &lb) || segments_intersect(p1, p2, &lb, &lt)
-}
-
-/// Segment vs. circle intersection using projection and clamped parameter t.
-fn segment_intersects_circle(p1: &Point, p2: &Point, circle: &CirclePos) -> bool {
-    // Distance from circle center to segment <= radius
-    let x1 = p1.x as f32;
-    let y1 = p1.y as f32;
-    let x2 = p2.x as f32;
-    let y2 = p2.y as f32;
-    let cx = circle.center.x as f32;
-    let cy = circle.center.y as f32;
-    let r = circle.radius as f32;
-
-    let dx = x2 - x1;
-    let dy = y2 - y1;
-    if dx == 0.0 && dy == 0.0 {
-        let ddx = x1 - cx;
-        let ddy = y1 - cy;
-        return ddx * ddx + ddy * ddy <= r * r;
-    }
-    let t = ((cx - x1) * dx + (cy - y1) * dy) / (dx * dx + dy * dy);
-    let t_clamped = t.max(0.0).min(1.0);
-    let closest_x = x1 + t_clamped * dx;
-    let closest_y = y1 + t_clamped * dy;
-    let ddx = closest_x - cx;
-    let ddy = closest_y - cy;
-    ddx * ddx + ddy * ddy <= r * r
-}
-
-/// Orientation of ordered triplet (a,b,c): returns 1 if clockwise, -1 if
-/// counter-clockwise, and 0 if collinear.
-fn orientation(a: &Point, b: &Point, c: &Point) -> i32 {
-    let ax = a.x as i64;
-    let ay = a.y as i64;
-    let bx = b.x as i64;
-    let by = b.y as i64;
-    let cx = c.x as i64;
-    let cy = c.y as i64;
-    let val = (by - ay) * (cx - bx) - (bx - ax) * (cy - by);
-    if val > 0 {
-        1
-    } else if val < 0 {
-        -1
-    } else {
-        0
-    }
-}
-
-/// True if point b lies on segment a–c, assuming collinearity.
-fn on_segment(a: &Point, b: &Point, c: &Point) -> bool {
-    // Is b on segment a-c (assuming collinear)
-    let min_x = a.x.min(c.x);
-    let max_x = a.x.max(c.x);
-    let min_y = a.y.min(c.y);
-    let max_y = a.y.max(c.y);
-    b.x >= min_x && b.x <= max_x && b.y >= min_y && b.y <= max_y
-}
-
-/// Robust segment–segment intersection including collinear overlap.
-fn segments_intersect(p1: &Point, q1: &Point, p2: &Point, q2: &Point) -> bool {
-    let o1 = orientation(p1, q1, p2);
-    let o2 = orientation(p1, q1, q2);
-    let o3 = orientation(p2, q2, p1);
-    let o4 = orientation(p2, q2, q1);
-
-    if o1 != o2 && o3 != o4 {
-        return true; // Proper intersection
-    }
-    // Special cases: collinear and overlapping endpoints
-    (o1 == 0 && on_segment(p1, p2, q1)) || (o2 == 0 && on_segment(p1, q2, q1)) || (o3 == 0 && on_segment(p2, p1, q2)) || (o4 == 0 && on_segment(p2, q1, q2))
-}
-
-/// Per-node asynchronous task bridging the simulated radio device, the radio
-/// manager from `moonblokz_radio_lib`, and the network task.
-///
-/// Responsibilities:
-/// - Initialize the per-node radio manager and device queues.
-/// - Forward outgoing radio events to the network task via `out_tx`.
-/// - Accept incoming control messages (packets to deliver, sends, CAD results).
-#[embassy_executor::task(pool_size = MAX_NODE_COUNT)]
-async fn node_task(spawner: Spawner, radio_module_config: RadioModuleConfig, node_id: u32, out_tx: NodesOutputQueueSender, in_rx: NodeInputQueueReceiver) {
-    let radio_output_queue: &'static mut RadioOutputQueue = Box::leak(Box::new(RadioOutputQueue::new()));
-    let radio_input_queue: &'static mut RadioInputQueue = Box::leak(Box::new(RadioInputQueue::new()));
-
-    let radio_output_queue_receiver = radio_output_queue.receiver();
-    let radio_input_queue_sender = radio_input_queue.sender();
-    let radio_device = moonblokz_radio_lib::radio_devices::simulator::RadioDevice::with(radio_output_queue.sender(), radio_input_queue.receiver());
-    let mut manager = RadioCommunicationManager::new();
-
-    let radio_config = moonblokz_radio_lib::RadioConfiguration {
-        delay_between_tx_packets: radio_module_config.delay_between_tx_packets,
-        delay_between_tx_messages: radio_module_config.delay_between_tx_messages,
-        echo_request_minimal_interval: radio_module_config.echo_request_minimal_interval,
-        echo_messages_target_interval: radio_module_config.echo_messages_target_interval,
-        echo_gathering_timeout: radio_module_config.echo_gathering_timeout,
-        relay_position_delay: radio_module_config.relay_position_delay,
-        scoring_matrix: ScoringMatrix::new_from_encoded(&radio_module_config.scoring_matrix),
-        retry_interval_for_missing_packets: radio_module_config.retry_interval_for_missing_packets,
-        tx_maximum_random_delay: radio_module_config.tx_maximum_random_delay,
-    };
-
-    let _ = manager.initialize(radio_config, spawner, radio_device, node_id, node_id as u64);
-
-    let mut arrived_messages: HashMap<u32, RadioMessage> = HashMap::new();
-
-    loop {
-        match select3(manager.receive_message(), in_rx.receive(), radio_output_queue_receiver.receive()).await {
-            Either3::First(res) => {
-                if let Ok(IncomingMessageItem::NewMessage(msg)) = res {
-                    if msg.message_type() == MessageType::AddBlock as u8 {
-                        let sequence = u32::from_le_bytes([msg.payload()[5], msg.payload()[6], msg.payload()[7], msg.payload()[8]]);
-                        if arrived_messages.contains_key(&sequence) {
-                            //duplicate, ignore
-                            continue;
-                        } else {
-                            arrived_messages.insert(sequence, msg.clone());
-                            out_tx
-                                .send(NodeOutputMessage {
-                                    node_id,
-                                    payload: NodeOutputPayload::NodeReachedInMeasurement(sequence),
-                                })
-                                .await;
-
-                            let _ = manager.report_message_processing_status(moonblokz_radio_lib::MessageProcessingResult::NewBlockAdded(msg.clone()));
-                        }
-                    }
-
-                    if msg.message_type() == MessageType::RequestBlockPart as u8 {
-                        let Some(sequence) = msg.sequence() else {
-                            continue;
-                        };
-                        if let Some(message) = arrived_messages.get(&sequence) {
-                            if let Some(request_blockpart_iterator) = msg.get_request_block_part_iterator() {
-                                let mut block_parts: [bool; RADIO_MAX_PACKET_COUNT] = [false; RADIO_MAX_PACKET_COUNT];
-                                for part in request_blockpart_iterator {
-                                    block_parts[part.packet_index as usize] = true;
-                                }
-                                let mut response_message = message.clone();
-                                let _ =response_message.add_packet_list(block_parts);
-                                let _ = manager.report_message_processing_status(moonblokz_radio_lib::MessageProcessingResult::RequestedBlockPartsFound(
-                                    response_message,
-                                    msg.sender_node_id(),
-                                ));
-                            }
-                        }
-                    }
-
-                    let _ = out_tx
-                        .send(NodeOutputMessage {
-                            node_id,
-                            payload: NodeOutputPayload::MessageReceived(msg),
-                        })
-                        .await;
-                } else if let Ok(IncomingMessageItem::CheckIfAlreadyHaveMessage(message_type, sequence, payload_checksum)) = res {
-                    if arrived_messages.contains_key(&sequence) {
-                        let _ = manager.report_message_processing_status(moonblokz_radio_lib::MessageProcessingResult::AlreadyHaveMessage(
-                            message_type,
-                            sequence,
-                            payload_checksum,
-                        ));
-                    }
-                }
-            }
-            Either3::Second(cmd) => match cmd {
-                NodeInputMessage::SendMessage(msg) => {
-                    if msg.message_type() == MessageType::AddBlock as u8 {
-                        let sequence = u32::from_le_bytes([msg.payload()[5], msg.payload()[6], msg.payload()[7], msg.payload()[8]]);
-                        arrived_messages.insert(sequence, msg.clone());
-                    }
-                    let _ = manager.send_message(msg);
-                }
-                NodeInputMessage::RadioTransfer(received_packet) => {
-                    radio_input_queue_sender
-                        .send(moonblokz_radio_lib::radio_devices::simulator::RadioInputMessage::ReceivePacket(received_packet))
-                        .await;
-                }
-                NodeInputMessage::CADResponse(success) => {
-                    let _ = radio_input_queue_sender
-                        .send(moonblokz_radio_lib::radio_devices::simulator::RadioInputMessage::CADResponse(success))
-                        .await;
-                }
-            },
-            Either3::Third(packet) => match packet {
-                moonblokz_radio_lib::radio_devices::simulator::RadioOutputMessage::SendPacket(packet) => {
-                    out_tx
-                        .send(NodeOutputMessage {
-                            node_id,
-                            payload: NodeOutputPayload::RadioTransfer(packet),
-                        })
-                        .await;
-                }
-                moonblokz_radio_lib::radio_devices::simulator::RadioOutputMessage::RequestCAD => {
-                    out_tx
-                        .send(NodeOutputMessage {
-                            node_id,
-                            payload: NodeOutputPayload::RequestCAD,
-                        })
-                        .await;
-                }
-            },
-        }
-    }
-}
+use super::types::{
+    CadItem, Node, NodeInputMessage, NodeInputQueue,
+    NodeMessage, NodeOutputMessage, NodeOutputPayload, NodesOutputQueue,
+    Point, Scene, AirtimeWaitingPacket, NODE_MESSAGES_CAPACITY, CAPTURE_THRESHOLD,
+};
+use super::signal_calculations::{
+    calculate_air_time, calculate_effective_distance, calculate_rssi,
+    calculate_snr_limit, dbm_to_mw, get_cad_time, mw_to_dbm,
+};
+use super::geometry::{distance2, distance_from_d2, is_intersect};
+use super::node_task::node_task;
 
 /// Central network task driving the simulation timeline and UI updates.
 ///
@@ -620,7 +44,7 @@ async fn node_task(spawner: Spawner, radio_module_config: RadioModuleConfig, nod
 ///    per node (to preserve order), compute SINR and collisions, and deliver RX.
 /// 4) Adjust simulation speed if auto-speed is enabled based on observed delay.
 #[embassy_executor::task]
-pub(crate) async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshChannelSender, ui_command_rx: UICommandChannelReceiver) {
+pub async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshChannelSender, ui_command_rx: UICommandChannelReceiver) {
     // Global counters for the UI
     let mut total_collision = 0;
     let mut total_received_packets = 0;
@@ -713,7 +137,6 @@ pub(crate) async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshChann
     }
     let mut delay_warning_issued = false;
     let cad_time = get_cad_time(&scene.lora_parameters);
-    let _preamble_time = get_preamble_time(&scene.lora_parameters);
 
     let mut upcounter = 0;
     let mut auto_speed_enabled = false;
@@ -958,18 +381,6 @@ pub(crate) async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshChann
                                 for packet in &node.airtime_waiting_packets {
                                     if packet.start_time < cad_waiting_item.end_time && packet.start_time + packet.airtime > cad_waiting_item.start_time {
                                         activity = true;
-
-                                        /*log::debug!(
-                                            "CAD detected packet.start_time={:?}, packet.end_time={:?}, cad.start_time={:?}, cad.end_time={:?} (node {}, sender {}, rssi {:.1} dBm)",
-                                            packet.start_time.as_millis(),
-                                            (packet.start_time + packet.airtime).as_millis(),
-                                            cad_waiting_item.start_time.as_millis(),
-                                            cad_waiting_item.end_time.as_millis(),
-                                            node.node_id,
-                                            packet.sender_node_id,
-                                            packet.rssi
-                                        );*/
-
                                         break;
                                     }
                                 }
@@ -1052,7 +463,7 @@ pub(crate) async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshChann
                             if sinr >= snr_limit && !destructive_collision {
                                 if let Some(sender) = &node.node_input_queue_sender {
                                     let _ = sender
-                                        .send(NodeInputMessage::RadioTransfer(ReceivedPacket {
+                                        .send(NodeInputMessage::RadioTransfer(moonblokz_radio_lib::ReceivedPacket {
                                             packet: node.airtime_waiting_packets[packet_to_process_index].packet.clone(),
                                             link_quality,
                                         }))

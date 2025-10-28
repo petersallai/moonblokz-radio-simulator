@@ -15,8 +15,7 @@ use env_logger::Builder;
 use log::{LevelFilter, info};
 use std::thread;
 
-mod network;
-mod signal_calculations;
+mod simulation;
 mod time_driver;
 mod ui;
 
@@ -31,7 +30,7 @@ pub type UICommandChannelReceiver = embassy_sync::channel::Receiver<'static, Cri
 pub type UICommandChannelSender = embassy_sync::channel::Sender<'static, CriticalSectionRawMutex, ui::UICommand, UI_COMMAND_CHANNEL_SIZE>;
 
 fn embassy_init(spawner: Spawner, ui_refresh_tx: UIRefreshChannelSender, ui_command_rx: UICommandChannelReceiver) {
-    let _ = spawner.spawn(network::network_task(spawner, ui_refresh_tx, ui_command_rx));
+    let _ = spawner.spawn(simulation::network_task(spawner, ui_refresh_tx, ui_command_rx));
 }
 
 fn main() {

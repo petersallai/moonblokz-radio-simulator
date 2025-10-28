@@ -144,6 +144,7 @@ pub(crate) fn mw_to_dbm(mw: f32) -> f32 {
     10.0 * mw.log10()
 }
 
+#[allow(dead_code)]
 pub(crate) fn get_preamble_time(lora_parameters: &LoraParameters) -> Duration {
     // Calculate the preamble time based on LoRa parameters
     let symbol_time = 2.0_f32.powi(lora_parameters.spreading_factor as i32) / lora_parameters.bandwidth as f32;
