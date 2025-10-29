@@ -49,6 +49,11 @@ impl ModeSelector {
     /// Returns the selected mode if any button was clicked
     pub fn render(&mut self, ctx: &egui::Context) -> Option<ModeSelection> {
         let mut selection = None;
+    const PANEL_HEIGHT: f32 = 500.0;
+    let button_size = egui::vec2(160.0, 32.0);
+    let button_height = button_size.y;
+    let bottom_padding = 30.0;
+    let min_button_gap = 20.0;
 
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.vertical_centered(|ui| {
@@ -77,70 +82,82 @@ impl ModeSelector {
 
                 ui.group(|ui| {
                     ui.set_width(panel_width);
-                    ui.set_min_height(450.0); // Increased by 150%
+                    ui.set_min_height(PANEL_HEIGHT);
                     ui.vertical_centered(|ui| {
+                        let start_y = ui.cursor().min.y;
                         ui.add_space(20.0);
                         self.render_icon(ui, &self.simulation_icon);
                         ui.add_space(15.0);
                         ui.heading(egui::RichText::new("Simulation").size(22.0).color(Color32::WHITE));
                         ui.add_space(10.0);
                         ui.label(
-                            egui::RichText::new("Start a simulated network based on pre-defined nodes and obstacles. This mode requires a scene definition file with node positions, obstacles & radio pathloss parameters.")
+                            egui::RichText::new("Start a simulated network based on pre-defined nodes and obstacles. This mode requires a scene definition file with node positions, obstacles & radio pathloss parameters.\n\nSee the documentation for file format definitions and examples.")
                                 .size(16.0),
                         );
-                        ui.add_space(40.0);
+                        let used_height = ui.cursor().min.y - start_y;
+                        let remaining = PANEL_HEIGHT - used_height - button_height - bottom_padding;
+                        let gap = remaining.max(min_button_gap);
+                        ui.add_space(gap);
                         let button = egui::Button::new(egui::RichText::new("Select scene").size(15.0).color(Color32::WHITE))
-                            .min_size(egui::vec2(160.0, 32.0));
+                            .min_size(button_size);
                         if ui.add(button).clicked() {
                             selection = Some(ModeSelection::Simulation);
                         }
-                        ui.add_space(20.0);
+                        ui.add_space(bottom_padding);
                     });
                 });
 
                 ui.group(|ui| {
                     ui.set_width(panel_width);
-                    ui.set_min_height(450.0); // Increased by 150%
+                    ui.set_min_height(PANEL_HEIGHT);
                     ui.vertical_centered(|ui| {
+                        let start_y = ui.cursor().min.y;
                         ui.add_space(20.0);
                         self.render_icon(ui, &self.realtime_icon);
                         ui.add_space(15.0);
                         ui.heading(egui::RichText::new("Real-time Tracking").size(22.0).color(Color32::WHITE));
                         ui.add_space(10.0);
                         ui.label(
-                            egui::RichText::new("Visualize the real-time log stream of a live network. This mode requires a scene definition file with node positions and a file that automatically updates with live logs.")
+                            egui::RichText::new("To begin real-time network log visualization, first select the log file actively updated by the log_collector. Ensure a scene.json file containing node position definitions is present in the same directory.\n\nSee the documentation for file format definitions and examples.")
                                 .size(16.0),
                         );
-                        ui.add_space(40.0);
+                        let used_height = ui.cursor().min.y - start_y;
+                        let remaining = PANEL_HEIGHT - used_height - button_height - bottom_padding;
+                        let gap = remaining.max(min_button_gap);
+                        ui.add_space(gap);
                         let button = egui::Button::new(egui::RichText::new("Connect to stream").size(15.0).color(Color32::WHITE))
-                            .min_size(egui::vec2(160.0, 32.0));
+                            .min_size(button_size);
                         if ui.add(button).clicked() {
                             selection = Some(ModeSelection::RealtimeTracking);
                         }
-                        ui.add_space(20.0);
+                        ui.add_space(bottom_padding);
                     });
                 });
 
                 ui.group(|ui| {
                     ui.set_width(panel_width);
-                    ui.set_min_height(450.0); // Increased by 150%
+                    ui.set_min_height(PANEL_HEIGHT);
                     ui.vertical_centered(|ui| {
+                        let start_y = ui.cursor().min.y;
                         ui.add_space(20.0);
                         self.render_icon(ui, &self.log_icon);
                         ui.add_space(15.0);
                         ui.heading(egui::RichText::new("Log Visualization").size(22.0).color(Color32::WHITE));
                         ui.add_space(10.0);
                         ui.label(
-                            egui::RichText::new("Visualize a previously saved log file from the network. This mode requires a scene definition file with node positions and a file that contains the log data.")
+                            egui::RichText::new("To view a saved network log, you must provide a log file that was previously created by the log_collector. This mode also requires a scene.json file, which defines the network node positions, to be present in the same directory.\n\nSee the documentation for file format definitions and examples.")
                                 .size(16.0),
                         );
-                        ui.add_space(40.0);
+                        let used_height = ui.cursor().min.y - start_y;
+                        let remaining = PANEL_HEIGHT - used_height - button_height - bottom_padding;
+                        let gap = remaining.max(min_button_gap);
+                        ui.add_space(gap);
                         let button = egui::Button::new(egui::RichText::new("Open log file").size(15.0).color(Color32::WHITE))
-                            .min_size(egui::vec2(160.0, 32.0));
+                            .min_size(button_size);
                         if ui.add(button).clicked() {
                             selection = Some(ModeSelection::LogVisualization);
                         }
-                        ui.add_space(20.0);
+                        ui.add_space(bottom_padding);
                     });
                 });
 
