@@ -18,7 +18,7 @@ use std::fs;
 
 use crate::{
     ui::{NodeInfo, NodeUIState, UICommand, UIRefreshState},
-    UICommandChannelReceiver, UIRefreshChannelSender,
+    UICommandQueueReceiver, UIRefreshQueueSender,
     time_driver,
 };
 
@@ -35,7 +35,7 @@ use super::geometry::{distance2, distance_from_d2, is_intersect};
 use super::node_task::node_task;
 
 /// Wait for a configuration file path from UI commands.
-async fn wait_for_config_file(ui_command_rx: &UICommandChannelReceiver) -> String {
+async fn wait_for_config_file(ui_command_rx: &UICommandQueueReceiver) -> String {
     loop {
         match ui_command_rx.receive().await {
             UICommand::LoadFile(file_path) => {
@@ -48,7 +48,7 @@ async fn wait_for_config_file(ui_command_rx: &UICommandChannelReceiver) -> Strin
 }
 
 /// Load and parse the scene configuration from a file.
-async fn load_scene(config_file_path: &str, ui_refresh_tx: &UIRefreshChannelSender) -> Option<Scene> {
+async fn load_scene(config_file_path: &str, ui_refresh_tx: &UIRefreshQueueSender) -> Option<Scene> {
     let file_result = fs::read_to_string(config_file_path)
         .with_context(|| format!("Failed to read file: {config_file_path}"));
 
@@ -72,7 +72,7 @@ async fn load_scene(config_file_path: &str, ui_refresh_tx: &UIRefreshChannelSend
 }
 
 /// Initialize and publish scene state to the UI.
-async fn initialize_scene_ui(scene: &Scene, ui_refresh_tx: &UIRefreshChannelSender) {
+async fn initialize_scene_ui(scene: &Scene, ui_refresh_tx: &UIRefreshQueueSender) {
     let scoring_matrix = ScoringMatrix::new_from_encoded(&scene.radio_module_config.scoring_matrix);
     let poor_limit = scoring_matrix.poor_limit;
     let excellent_limit = scoring_matrix.excellent_limit;
@@ -171,7 +171,7 @@ async fn handle_radio_transfer(
     packet: RadioPacket,
     nodes_map: &mut HashMap<u32, Node>,
     scene: &Scene,
-    ui_refresh_tx: &UIRefreshChannelSender,
+    ui_refresh_tx: &UIRefreshQueueSender,
     total_sent_packets: &mut u64,
     total_received_packets: u64,
     total_collision: u64,
@@ -368,7 +368,7 @@ async fn process_packet_reception(
     scene: &Scene,
     total_received_packets: &mut u64,
     total_collision: &mut u64,
-    ui_refresh_tx: &UIRefreshChannelSender,
+    ui_refresh_tx: &UIRefreshQueueSender,
     total_sent_packets: u64,
 ) {
     node.airtime_waiting_packets[packet_index].processed = true;
@@ -472,7 +472,7 @@ async fn process_all_packet_receptions(
     scene: &Scene,
     total_received_packets: &mut u64,
     total_collision: &mut u64,
-    ui_refresh_tx: &UIRefreshChannelSender,
+    ui_refresh_tx: &UIRefreshQueueSender,
     total_sent_packets: u64,
 ) {
     for node in nodes_map.values_mut() {
@@ -500,7 +500,7 @@ fn adjust_auto_speed(
     upcounter: &mut u32,
     auto_speed_min_percent: u32,
     auto_speed_max_percent: u32,
-    ui_refresh_tx: &UIRefreshChannelSender,
+    ui_refresh_tx: &UIRefreshQueueSender,
 ) {
     // Increase speed slowly when we have headroom
     if time_delay < Duration::from_millis(8) {
@@ -539,7 +539,7 @@ fn adjust_auto_speed(
 ///    per node (to preserve order), compute SINR and collisions, and deliver RX.
 /// 4) Adjust simulation speed if auto-speed is enabled based on observed delay.
 #[embassy_executor::task]
-pub async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshChannelSender, ui_command_rx: UICommandChannelReceiver) {
+pub async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshQueueSender, ui_command_rx: UICommandQueueReceiver) {
     // Global counters for the UI
     let mut total_collision = 0;
     let mut total_received_packets = 0;

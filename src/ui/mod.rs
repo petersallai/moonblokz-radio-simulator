@@ -63,8 +63,8 @@ pub enum UICommand {
 
 pub struct AppState {
     pub alert: Option<String>,
-    pub ui_refresh_rx: crate::UIRefreshChannelReceiver,
-    pub ui_command_tx: crate::UICommandChannelSender,
+    pub ui_refresh_rx: crate::UIRefreshQueueReceiver,
+    pub ui_command_tx: crate::UICommandQueueSender,
     // Mode selection
     pub mode_selector: mode_selector::ModeSelector,
     pub mode_selected: bool,
@@ -111,7 +111,7 @@ struct PersistedSettings {
 }
 
 impl AppState {
-    pub fn new(rx: crate::UIRefreshChannelReceiver, tx: crate::UICommandChannelSender, storage: Option<&dyn eframe::Storage>) -> Self {
+    pub fn new(rx: crate::UIRefreshQueueReceiver, tx: crate::UICommandQueueSender, storage: Option<&dyn eframe::Storage>) -> Self {
         // Load persisted settings if available
         let persisted: PersistedSettings = storage.and_then(|s| eframe::get_value(s, "app_settings")).unwrap_or_default();
 

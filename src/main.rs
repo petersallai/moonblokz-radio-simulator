@@ -12,7 +12,7 @@ use eframe::egui;
 use embassy_executor::{Executor, Spawner};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use env_logger::Builder;
-use log::{error, info, LevelFilter};
+use log::{LevelFilter, error, info};
 use std::thread;
 
 mod simulation;
@@ -20,16 +20,16 @@ mod time_driver;
 mod ui;
 
 pub const UI_REFRESH_CHANNEL_SIZE: usize = 500;
-pub type UIRefreshChannel = embassy_sync::channel::Channel<CriticalSectionRawMutex, ui::UIRefreshState, UI_REFRESH_CHANNEL_SIZE>;
-pub type UIRefreshChannelReceiver = embassy_sync::channel::Receiver<'static, CriticalSectionRawMutex, ui::UIRefreshState, UI_REFRESH_CHANNEL_SIZE>;
-pub type UIRefreshChannelSender = embassy_sync::channel::Sender<'static, CriticalSectionRawMutex, ui::UIRefreshState, UI_REFRESH_CHANNEL_SIZE>;
+pub type UIRefreshQueue = embassy_sync::channel::Channel<CriticalSectionRawMutex, ui::UIRefreshState, UI_REFRESH_CHANNEL_SIZE>;
+pub type UIRefreshQueueReceiver = embassy_sync::channel::Receiver<'static, CriticalSectionRawMutex, ui::UIRefreshState, UI_REFRESH_CHANNEL_SIZE>;
+pub type UIRefreshQueueSender = embassy_sync::channel::Sender<'static, CriticalSectionRawMutex, ui::UIRefreshState, UI_REFRESH_CHANNEL_SIZE>;
 
 pub const UI_COMMAND_CHANNEL_SIZE: usize = 100;
-pub type UICommandChannel = embassy_sync::channel::Channel<CriticalSectionRawMutex, ui::UICommand, UI_COMMAND_CHANNEL_SIZE>;
-pub type UICommandChannelReceiver = embassy_sync::channel::Receiver<'static, CriticalSectionRawMutex, ui::UICommand, UI_COMMAND_CHANNEL_SIZE>;
-pub type UICommandChannelSender = embassy_sync::channel::Sender<'static, CriticalSectionRawMutex, ui::UICommand, UI_COMMAND_CHANNEL_SIZE>;
+pub type UICommandQueue = embassy_sync::channel::Channel<CriticalSectionRawMutex, ui::UICommand, UI_COMMAND_CHANNEL_SIZE>;
+pub type UICommandQueueReceiver = embassy_sync::channel::Receiver<'static, CriticalSectionRawMutex, ui::UICommand, UI_COMMAND_CHANNEL_SIZE>;
+pub type UICommandQueueSender = embassy_sync::channel::Sender<'static, CriticalSectionRawMutex, ui::UICommand, UI_COMMAND_CHANNEL_SIZE>;
 
-fn embassy_init(spawner: Spawner, ui_refresh_tx: UIRefreshChannelSender, ui_command_rx: UICommandChannelReceiver) {
+fn embassy_init(spawner: Spawner, ui_refresh_tx: UIRefreshQueueSender, ui_command_rx: UICommandQueueReceiver) {
     let _ = spawner.spawn(simulation::network_task(spawner, ui_refresh_tx, ui_command_rx));
 }
 
@@ -58,13 +58,13 @@ fn main() {
     Builder::new()
         .filter_level(LevelFilter::Info)
         .filter(Some("moonblokz_radio_simulator"), LevelFilter::Debug)
-        .filter(Some("moonblokz_radio_lib"), LevelFilter::Debug)
+        .filter(Some("moonblokz_radio_lib"), LevelFilter::Info)
         .init();
 
     info!("Starting up");
 
-    let ui_refresh_channel: &'static UIRefreshChannel = Box::leak(Box::new(UIRefreshChannel::new()));
-    let ui_command_channel: &'static UICommandChannel = Box::leak(Box::new(UICommandChannel::new()));
+    let ui_refresh_channel: &'static UIRefreshQueue = Box::leak(Box::new(UIRefreshQueue::new()));
+    let ui_command_channel: &'static UICommandQueue = Box::leak(Box::new(UICommandQueue::new()));
 
     let ui_refresh_tx = ui_refresh_channel.sender();
     let ui_refresh_rx = ui_refresh_channel.receiver();

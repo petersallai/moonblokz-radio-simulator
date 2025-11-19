@@ -19,8 +19,8 @@
     "echo_request_minimal_interval": 3,
     "echo_messages_target_interval": 100,
     "echo_gathering_timeout": 1,
-    "relay_position_delay": 5,
-    "scoring_matrix": [255, 243, 65, 123, 47],
+    "relay_position_delay": 1,
+    "scoring_matrix": [173, 242, 49, 123, 42],
     "retry_interval_for_missing_packets": 60,
     "tx_maximum_random_delay": 200
   },
