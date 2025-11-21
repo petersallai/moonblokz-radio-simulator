@@ -22,14 +22,14 @@
 //! Embassy executor. It communicates with the UI via channels defined in
 //! the parent module.
 
-pub mod types;
-pub mod signal_calculations;
 pub mod geometry;
+pub mod network;
 pub mod node_task;
-pub mod network_task;
+pub mod signal_calculations;
+pub mod types;
 
 // Re-export the main network task for convenience
-pub use network_task::network_task;
+pub use network::network_task;
 
 // Re-export commonly used types
-pub use types::{Point, Obstacle, NodeMessage};
+pub use types::{NodeMessage, Obstacle, Point};
