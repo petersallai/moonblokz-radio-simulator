@@ -37,15 +37,49 @@ pub(crate) struct LoraParameters {
     low_data_rate_optimization: bool,
 }
 
+/// Calculate the path loss (in dB) at a given distance using a log-distance
+/// path loss model with log-normal shadowing.
+///
+/// # Formula
+///
+/// ```text
+/// PL(d) = PL(d₀) + 10 × n × log₁₀(d/d₀) + X_σ
+/// where d₀ = 1 meter (reference distance)
+/// ```
+///
+/// Where:
+/// - `PL(d₀)`: Path loss at reference distance (1 meter), from `params.path_loss_at_reference_distance`
+/// - `n`: Path loss exponent, from `params.path_loss_exponent` (typical values: 2.0 for free space, 2-4 for urban environments)
+/// - `d`: Distance in meters
+/// - `X_σ`: Log-normal shadowing term sampled from Normal(0, σ) where σ = `params.shadowing_sigma`
+///
+/// # Parameters
+///
+/// - `distance`: The distance between transmitter and receiver in meters
+/// - `params`: Path loss model parameters including exponent, shadowing sigma, and reference loss
+///
+/// # Returns
+///
+/// Path loss in decibels (dB). This is a stochastic value due to the shadowing component.
+///
+/// # Notes
+///
+/// - For distances < 1.0 meter, returns the reference path loss without further attenuation
+/// - The shadowing term introduces randomness to model environmental variations and multipath effects
+/// - Each call samples a new shadowing value, so repeated calls with the same distance yield different results
 pub(crate) fn calculate_path_loss(distance: f32, params: &PathLossParameters) -> f32 {
     if distance < 1.0 {
         return params.path_loss_at_reference_distance;
     }
     let path_loss = params.path_loss_at_reference_distance + 10.0 * params.path_loss_exponent * distance.log10();
     // Sample log-normal shadowing as a Normal(0, sigma) in dB
-    let normal = Normal::new(0.0_f32, params.shadowing_sigma).expect("invalid normal sigma");
-    let mut rng = thread_rng();
-    let shadowing: f32 = normal.sample(&mut rng);
+    let shadowing = if params.shadowing_sigma > 0.0 {
+        let normal = Normal::new(0.0_f32, params.shadowing_sigma).expect("invalid normal sigma");
+        let mut rng = thread_rng();
+        normal.sample(&mut rng)
+    } else {
+        0.0
+    };
     path_loss + shadowing
 }
 
@@ -62,7 +96,7 @@ pub(crate) fn calculate_path_loss(distance: f32, params: &PathLossParameters) ->
 pub(crate) fn calculate_effective_distance(tx_power_dbm: f32, lora_parameters: &LoraParameters, path_loss_parameters: &PathLossParameters) -> f32 {
     // Find distance d where received power equals the receiving limit (sensitivity threshold):
     //   P_rx(dBm) = P_tx(dBm) - PL(d) = receiving_limit
-    // With PL(d) = PL(d0) + 10 * n * log10(d/d0) and d0 = 1 m, PL(d) = PL0 + 10*n*log10(d)
+    // With PL(d) = PL(d0) + 10 * n * log10(d/d0) and d0 = 1 m, PL(d) = PL0 + 10n*log10(d)
     // Solve for d:
     //   P_tx - (PL0 + 10n log10 d) = RL  =>  10n log10 d = P_tx - RL - PL0  =>
     //   d = 10^((P_tx - RL - PL0) / (10n))
