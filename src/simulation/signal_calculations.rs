@@ -102,8 +102,11 @@ pub(crate) fn calculate_effective_distance(tx_power_dbm: f32, lora_parameters: &
     //   d = 10^((P_tx - RL - PL0) / (10n))
     let pl0 = path_loss_parameters.path_loss_at_reference_distance;
     let rl = calculate_receiving_limit_with_basic_noise(lora_parameters, path_loss_parameters);
-    let numerator = tx_power_dbm as f32 - rl - pl0;
+    let numerator = tx_power_dbm - rl - pl0;
     let denom = 10.0 * path_loss_parameters.path_loss_exponent;
+    if numerator <= 0.0 {
+        return 0.0; // or 1.0, depending on desired semantics
+    }
     10.0_f32.powf(numerator / denom)
 }
 
@@ -151,7 +154,7 @@ pub(crate) fn calculate_air_time(lora_parameters: &LoraParameters, payload_size:
     let denom = 4.0 * (sf - 2.0 * de);
     let numerator = 8.0 * pl - 4.0 * sf + 28.0 + 16.0 * crc - 20.0 * ih;
     let base = (numerator / denom).ceil();
-    let payload_symbols = 8.0 + (base.max(0.0)) * (cr + 4.0);
+    let payload_symbols = 8.0 + (base * (cr + 4.0)).max(0.0);
 
     preamble_time + payload_symbols * symbol_time
 }
