@@ -174,9 +174,70 @@ pub(crate) fn calculate_rssi(distance: f32, tx_power_dbm: f32, params: &PathLoss
     tx_power_dbm - path_loss_db
 }
 
+/// Convert power from dBm (decibels relative to 1 milliwatt) to milliwatts.
+///
+/// # Formula
+///
+/// ```text
+/// P(mW) = 10^(P(dBm) / 10)
+/// ```
+///
+/// # Parameters
+///
+/// - `dbm`: Power level in dBm (decibels relative to 1 milliwatt)
+///
+/// # Returns
+///
+/// Power in milliwatts (mW)
+///
+/// # Examples
+///
+/// ```text
+/// 0 dBm   → 1 mW
+/// 10 dBm  → 10 mW
+/// 20 dBm  → 100 mW
+/// -10 dBm → 0.1 mW
+/// ```
+///
+/// # Notes
+///
+/// This is a standard logarithmic power conversion used in RF engineering.
+/// The dBm scale is logarithmic, making it easier to work with the wide
+/// dynamic range of radio signal powers.
 pub(crate) fn dbm_to_mw(dbm: f32) -> f32 {
     10f32.powf(dbm / 10.0)
 }
+
+/// Convert power from milliwatts to dBm (decibels relative to 1 milliwatt).
+///
+/// # Formula
+///
+/// ```text
+/// P(dBm) = 10 × log₁₀(P(mW))
+/// ```
+///
+/// # Parameters
+///
+/// - `mw`: Power level in milliwatts (must be positive)
+///
+/// # Returns
+///
+/// Power in dBm (decibels relative to 1 milliwatt)
+///
+/// # Examples
+///
+/// ```text
+/// 1 mW    → 0 dBm
+/// 10 mW   → 10 dBm
+/// 100 mW  → 20 dBm
+/// 0.1 mW  → -10 dBm
+/// ```
+///
+/// # Notes
+///
+/// - This is the inverse operation of `dbm_to_mw()`
+/// - For `mw <= 0`, this function will return NaN or -∞ (undefined behavior)
+/// - In practice, power values should always be positive
 pub(crate) fn mw_to_dbm(mw: f32) -> f32 {
     10.0 * mw.log10()
 }
