@@ -16,11 +16,39 @@ use rand::thread_rng;
 use rand_distr::{Distribution, Normal};
 use serde::Deserialize;
 
+/// Parameters defining the radio channel propagation model.
+///
+/// This struct encapsulates the constants used in the log-distance path loss model
+/// with log-normal shadowing. These parameters determine how signal strength
+/// decays over distance and how much random variation (shadowing) is applied.
 #[derive(Deserialize, Clone)]
 pub(crate) struct PathLossParameters {
+    /// Path loss exponent (n).
+    ///
+    /// Determines how quickly the signal power decays with distance.
+    /// - n = 2.0: Free space (vacuum)
+    /// - n = 2.7 to 3.5: Urban areas
+    /// - n = 3.0 to 5.0: Indoor obstructed environments
     pub(crate) path_loss_exponent: f32,
+
+    /// Standard deviation for log-normal shadowing (σ) in dB.
+    ///
+    /// Represents the random variation in path loss due to environmental clutter
+    /// (buildings, trees, etc.) that is not captured by the deterministic path loss.
+    /// A value of 0.0 disables shadowing.
     pub(crate) shadowing_sigma: f32,
+
+    /// Path loss at the reference distance d₀ (typically 1 meter) in dB.
+    ///
+    /// This is the baseline loss measured or calculated at a short distance from
+    /// the transmitter.
     pub(crate) path_loss_at_reference_distance: f32,
+
+    /// The thermal noise floor of the receiver in dBm.
+    ///
+    /// Represents the minimum signal power below which the signal is indistinguishable
+    /// from background noise (before considering SNR requirements).
+    /// Typical values are around -120 dBm to -100 dBm depending on bandwidth.
     pub(crate) noise_floor: f32,
 }
 

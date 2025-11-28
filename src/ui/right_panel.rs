@@ -1,9 +1,9 @@
 // Right panel: Node inspector and message stream
 
+use crate::ui::{AppState, UICommand, color_for_message_type};
 use eframe::egui;
 use egui::Color32;
 use std::cmp::max;
-use crate::ui::{AppState, UICommand, color_for_message_type};
 
 pub fn render(ctx: &egui::Context, state: &mut AppState) {
     egui::SidePanel::right("inspector_right").exact_width(400.0).show(ctx, |ui| {
@@ -99,15 +99,8 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
                             }
                         }
                     });
-                    ui.horizontal(|ui| {
-                        let pad = (avail_w - button_w).max(0.0) / 2.0;
-                        ui.add_space(pad);
-                        if ui.add_sized([button_w, button_h], egui::Button::new("Send Message...")).clicked() {
-                            log::debug!("Center on {}", node_id);
-                        }
-                    });
 
-                    // 5px spacing above the first (top-most) button, separating it from the table
+                    // 5px spacing above the button, separating it from the table
                     ui.add_space(5.0);
                 }
 

@@ -4,7 +4,8 @@ use eframe::egui;
 use egui::Color32;
 use std::time::Duration;
 use crate::simulation::Obstacle;
-use crate::ui::{AppState, UICommand, color_for_message_type, NODE_RADIO_TRANSFER_INDICATOR_TIMEOUT};
+use crate::ui::{AppState, UICommand};
+use crate::ui::app_state::{color_for_message_type, NODE_RADIO_TRANSFER_INDICATOR_TIMEOUT};
 
 pub fn render(ctx: &egui::Context, state: &mut AppState) {
     egui::CentralPanel::default().show(ctx, |ui| {
