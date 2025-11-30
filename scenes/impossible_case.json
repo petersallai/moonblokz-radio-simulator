@@ -1,26 +1,26 @@
 {
   "path_loss_parameters": {
-    "path_loss_exponent": 3.0,
-    "shadowing_sigma": 3.0,
+    "path_loss_exponent": 2.8,
+    "shadowing_sigma": 2.0,
     "path_loss_at_reference_distance": 38.0,
     "noise_floor": -117.0
   },
-  "lora_parameters":{
-    "bandwidth": 125000,
+  "lora_parameters": {
+    "bandwidth": 250000,
     "spreading_factor": 7,
-    "coding_rate": 4,
+    "coding_rate": 1,
     "preamble_symbols": 8.0,
     "crc_enabled": true,
     "low_data_rate_optimization": false
   },
-  "radio_module_config": {
+    "radio_module_config": {
     "delay_between_tx_packets": 200,
-    "delay_between_tx_messages": 10,
-    "echo_request_minimal_interval": 1,
+    "delay_between_tx_messages": 5,
+    "echo_request_minimal_interval": 3,
     "echo_messages_target_interval": 100,
     "echo_gathering_timeout": 1,
-    "relay_position_delay": 10,
-    "scoring_matrix": [255, 243, 65, 82, 143],
+    "relay_position_delay": 1,
+    "scoring_matrix": [173, 242, 49, 123, 42],
     "retry_interval_for_missing_packets": 60,
     "tx_maximum_random_delay": 200
   },

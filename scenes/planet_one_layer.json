@@ -6,21 +6,21 @@
     "noise_floor": -117.0
   },
   "lora_parameters":{
-    "bandwidth": 125000,
+    "bandwidth": 250000,
     "spreading_factor": 7,
-    "coding_rate": 4,
+    "coding_rate": 1,
     "preamble_symbols": 8.0,
     "crc_enabled": true,
     "low_data_rate_optimization": false
   },
   "radio_module_config": {
     "delay_between_tx_packets": 200,
-    "delay_between_tx_messages": 10,
+    "delay_between_tx_messages": 5,
     "echo_request_minimal_interval": 1,
     "echo_messages_target_interval": 100,
     "echo_gathering_timeout": 1,
-    "relay_position_delay": 10,
-    "scoring_matrix": [255, 243, 65, 82, 143],
+    "relay_position_delay": 1,
+    "scoring_matrix": [90, 243, 65, 123, 37],
     "retry_interval_for_missing_packets": 60,
     "tx_maximum_random_delay": 200
   },
