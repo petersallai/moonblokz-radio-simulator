@@ -137,7 +137,9 @@ fn main() {
         .stack_size(192 * 1024 * 1024)
         .name("embassy-executor".to_string())
         .spawn(move || {
-            // Leak the executor to satisfy the 'static lifetime required by run()
+            // INTENTIONAL LEAK: Box::leak provides 'static lifetime for Embassy executor.
+            // This allows the embedded moonblokz-radio-lib code to run unmodified in the simulator.
+            // The executor lives for the entire program lifetime and is cleaned up on process exit.
             let executor: &'static mut Executor = Box::leak(Box::new(Executor::new()));
             executor.run(|spawner| embassy_init(spawner, ui_refresh_tx, ui_command_rx));
         })

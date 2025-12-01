@@ -149,6 +149,8 @@ fn initialize_nodes(spawner: &Spawner, scene: &Scene, nodes_output_channel: &'st
     let mut nodes_map: HashMap<u32, Node> = HashMap::new();
 
     for node in &scene.nodes {
+        // INTENTIONAL LEAK: Box::leak provides 'static lifetime for Embassy channels.
+        // Required to use the embedded moonblokz-radio-lib code in the simulator.
         let node_input_channel = Box::leak(Box::new(NodeInputQueue::new()));
         let _ = spawner.spawn(node_task(
             *spawner,
@@ -673,6 +675,8 @@ pub async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshQueueSender,
     initialize_scene_ui(&scene, &ui_refresh_tx).await;
 
     // Set up nodes and spawn tasks
+    // INTENTIONAL LEAK: Box::leak provides 'static lifetime for Embassy channels.
+    // Required to use the embedded moonblokz-radio-lib code in the simulator.
     let nodes_output_channel = Box::leak(Box::new(NodesOutputQueue::new()));
     let mut nodes_map = initialize_nodes(&spawner, &scene, nodes_output_channel);
 
