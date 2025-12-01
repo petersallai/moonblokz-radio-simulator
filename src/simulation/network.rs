@@ -17,22 +17,17 @@ use std::collections::{HashMap, VecDeque};
 use std::fs;
 
 use crate::{
+    UICommandQueueReceiver, UIRefreshQueueSender, time_driver,
     ui::{NodeInfo, NodeUIState, UICommand, UIRefreshState},
-    UICommandQueueReceiver, UIRefreshQueueSender,
-    time_driver,
 };
 
-use super::types::{
-    CadItem, Node, NodeInputMessage, NodeInputQueue,
-    NodeMessage, NodeOutputMessage, NodeOutputPayload, NodesOutputQueue,
-    Point, Scene, AirtimeWaitingPacket, NODE_MESSAGES_CAPACITY, CAPTURE_THRESHOLD,
-};
-use super::signal_calculations::{
-    calculate_air_time, calculate_effective_distance, calculate_rssi,
-    calculate_snr_limit, dbm_to_mw, get_cad_time, mw_to_dbm,
-};
-use super::geometry::{distance2, distance_from_d2, is_intersect};
+use super::geometry::{distance_from_d2, distance2, is_intersect};
 use super::node_task::node_task;
+use super::signal_calculations::{calculate_air_time, calculate_effective_distance, calculate_rssi, calculate_snr_limit, dbm_to_mw, get_cad_time, mw_to_dbm};
+use super::types::{
+    AirtimeWaitingPacket, CAPTURE_THRESHOLD, CadItem, NODE_MESSAGES_CAPACITY, Node, NodeInputMessage, NodeInputQueue, NodeMessage, NodeOutputMessage,
+    NodeOutputPayload, NodesOutputQueue, Point, Scene,
+};
 
 /// Wait for a configuration file path from UI commands.
 ///
@@ -72,8 +67,7 @@ async fn wait_for_config_file(ui_command_rx: &UICommandQueueReceiver) -> String 
 ///
 /// `Some(Scene)` if successful, `None` if file read or parse errors occurred.
 async fn load_scene(config_file_path: &str, ui_refresh_tx: &UIRefreshQueueSender) -> Option<Scene> {
-    let file_result = fs::read_to_string(config_file_path)
-        .with_context(|| format!("Failed to read file: {config_file_path}"));
+    let file_result = fs::read_to_string(config_file_path).with_context(|| format!("Failed to read file: {config_file_path}"));
 
     let data = match file_result {
         Ok(data) => data,
@@ -109,7 +103,7 @@ async fn initialize_scene_ui(scene: &Scene, ui_refresh_tx: &UIRefreshQueueSender
     let scoring_matrix = ScoringMatrix::new_from_encoded(&scene.radio_module_config.scoring_matrix);
     let poor_limit = scoring_matrix.poor_limit;
     let excellent_limit = scoring_matrix.excellent_limit;
-    
+
     _ = ui_refresh_tx.send(UIRefreshState::PoorAndExcellentLimits(poor_limit, excellent_limit)).await;
 
     // Publish initial nodes to the UI (radio_strength rendered as effective distance in world units).
@@ -124,11 +118,7 @@ async fn initialize_scene_ui(scene: &Scene, ui_refresh_tx: &UIRefreshQueueSender
                         x: n.position.x,
                         y: n.position.y,
                     },
-                    radio_strength: calculate_effective_distance(
-                        n.radio_strength as f32,
-                        &scene.lora_parameters,
-                        &scene.path_loss_parameters,
-                    ) as u32,
+                    radio_strength: calculate_effective_distance(n.radio_strength as f32, &scene.lora_parameters, &scene.path_loss_parameters) as u32,
                 })
                 .collect(),
         ))
@@ -155,11 +145,7 @@ async fn initialize_scene_ui(scene: &Scene, ui_refresh_tx: &UIRefreshQueueSender
 /// # Returns
 ///
 /// HashMap mapping node IDs to their initialized Node structs.
-fn initialize_nodes(
-    spawner: &Spawner,
-    scene: &Scene,
-    nodes_output_channel: &'static NodesOutputQueue,
-) -> HashMap<u32, Node> {
+fn initialize_nodes(spawner: &Spawner, scene: &Scene, nodes_output_channel: &'static NodesOutputQueue) -> HashMap<u32, Node> {
     let mut nodes_map: HashMap<u32, Node> = HashMap::new();
 
     for node in &scene.nodes {
@@ -171,15 +157,11 @@ fn initialize_nodes(
             nodes_output_channel.sender(),
             node_input_channel.receiver(),
         ));
-        
+
         let mut new_node = node.clone();
         new_node.node_input_queue_sender = Some(node_input_channel.sender());
-        new_node.cached_effective_distance = calculate_effective_distance(
-            new_node.radio_strength as f32,
-            &scene.lora_parameters,
-            &scene.path_loss_parameters,
-        );
-        
+        new_node.cached_effective_distance = calculate_effective_distance(new_node.radio_strength as f32, &scene.lora_parameters, &scene.path_loss_parameters);
+
         // Ensure runtime-only fields are initialized
         if new_node.node_messages.is_empty() {
             new_node.node_messages = VecDeque::with_capacity(NODE_MESSAGES_CAPACITY.min(64));
@@ -207,7 +189,7 @@ fn initialize_nodes(
 /// The `Instant` of the next event requiring processing.
 fn calculate_next_event_time(nodes_map: &HashMap<u32, Node>) -> Instant {
     let mut next_event = Instant::now() + Duration::from_secs(3600);
-    
+
     for node in nodes_map.values() {
         for airtime_packet in &node.airtime_waiting_packets {
             if !airtime_packet.processed {
@@ -217,14 +199,14 @@ fn calculate_next_event_time(nodes_map: &HashMap<u32, Node>) -> Instant {
                 }
             }
         }
-        
+
         for cad_item in &node.cad_waiting_list {
             if cad_item.end_time < next_event {
                 next_event = cad_item.end_time;
             }
         }
     }
-    
+
     next_event
 }
 
@@ -284,7 +266,7 @@ async fn handle_radio_transfer(
 
         // Enqueue the transmitter's own airtime window for collision modeling.
         let airtime_ms = (calculate_air_time(&scene.lora_parameters, packet.length) * 1000.0) as u64;
-        node.airtime_waiting_packets.push(AirtimeWaitingPacket {
+        node.push_airtime_packet(AirtimeWaitingPacket {
             packet: packet.clone(),
             sender_node_id: node_id,
             start_time: Instant::now(),
@@ -314,24 +296,10 @@ async fn handle_radio_transfer(
     ));
 
     // Find target receivers within range and not occluded
-    let target_node_ids = find_target_nodes(
-        node_id,
-        &node_position,
-        node_effective_distance,
-        nodes_map,
-        scene,
-    );
+    let target_node_ids = find_target_nodes(node_id, &node_position, node_effective_distance, nodes_map, scene);
 
     // Queue packet reception for each target
-    distribute_packet_to_targets(
-        &packet,
-        node_id,
-        &node_position,
-        node_radio_strength,
-        &target_node_ids,
-        nodes_map,
-        scene,
-    );
+    distribute_packet_to_targets(&packet, node_id, &node_position, node_radio_strength, &target_node_ids, nodes_map, scene);
 }
 
 /// Find all target nodes within radio range and not blocked by obstacles.
@@ -351,13 +319,7 @@ async fn handle_radio_transfer(
 /// # Returns
 ///
 /// Vector of node IDs that can receive the transmission.
-fn find_target_nodes(
-    sender_id: u32,
-    sender_position: &Point,
-    sender_effective_distance: f32,
-    nodes_map: &HashMap<u32, Node>,
-    scene: &Scene,
-) -> Vec<u32> {
+fn find_target_nodes(sender_id: u32, sender_position: &Point, sender_effective_distance: f32, nodes_map: &HashMap<u32, Node>, scene: &Scene) -> Vec<u32> {
     let eff2 = sender_effective_distance.powi(2);
     let mut target_ids = Vec::new();
 
@@ -415,8 +377,8 @@ fn distribute_packet_to_targets(
 
         let d2 = distance2(sender_position, &target_node.position);
         let distance = distance_from_d2(d2);
-        
-        target_node.airtime_waiting_packets.push(AirtimeWaitingPacket {
+
+        target_node.push_airtime_packet(AirtimeWaitingPacket {
             packet: packet.clone(),
             sender_node_id: sender_id,
             start_time: Instant::now(),
@@ -442,19 +404,16 @@ fn distribute_packet_to_targets(
 /// * `nodes_map` - Mutable map of all nodes with pending CAD requests
 fn process_cad_requests(nodes_map: &mut HashMap<u32, Node>) {
     let now = Instant::now();
-    
+
     for node in nodes_map.values_mut() {
         for cad_item in node.cad_waiting_list.iter() {
             if cad_item.end_time < now {
-                let activity = node.airtime_waiting_packets.iter().any(|packet| {
-                    packet.start_time < cad_item.end_time
-                        && packet.start_time + packet.airtime > cad_item.start_time
-                });
+                let activity = node
+                    .airtime_waiting_packets
+                    .iter()
+                    .any(|packet| packet.start_time < cad_item.end_time && packet.start_time + packet.airtime > cad_item.start_time);
 
-                let _ = node.node_input_queue_sender
-                    .as_ref()
-                    .unwrap()
-                    .try_send(NodeInputMessage::CADResponse(activity));
+                let _ = node.node_input_queue_sender.as_ref().unwrap().try_send(NodeInputMessage::CADResponse(activity));
             }
         }
 
@@ -475,9 +434,8 @@ fn find_next_packet_to_process(node: &mut Node) -> Option<(usize, Instant, Insta
         .unwrap_or_else(Instant::now);
 
     // Clean up processed packets that are no longer relevant
-    node.airtime_waiting_packets.retain(|packet| {
-        !packet.processed || packet.start_time + packet.airtime >= earliest_start_time
-    });
+    node.airtime_waiting_packets
+        .retain(|packet| !packet.processed || packet.start_time + packet.airtime >= earliest_start_time);
 
     // Find the first unprocessed packet
     node.airtime_waiting_packets
@@ -819,21 +777,15 @@ pub async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshQueueSender,
 
                 if auto_speed_enabled {
                     if let Some(time_delay) = delay_for_autospeed {
-                        adjust_auto_speed(
-                            time_delay,
-                            &mut upcounter,
-                            auto_speed_min_percent,
-                            auto_speed_max_percent,
-                            &ui_refresh_tx,
-                        );
+                        adjust_auto_speed(time_delay, &mut upcounter, auto_speed_min_percent, auto_speed_max_percent, &ui_refresh_tx);
                     }
                 }
-                
+
                 // Only run event processing when the actual event deadline was reached
                 if event_reached {
                     // Process CAD requests
                     process_cad_requests(&mut nodes_map);
-                    
+
                     // Process all pending packet receptions
                     process_all_packet_receptions(
                         &mut nodes_map,

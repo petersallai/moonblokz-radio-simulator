@@ -218,6 +218,14 @@ pub enum NodeInputMessage {
 /// Maximum message history per node (ring buffer). Bounded to keep UI/memory predictable.
 pub const NODE_MESSAGES_CAPACITY: usize = 1000;
 
+/// Maximum number of airtime waiting packets per node before overflow warnings.
+/// This prevents unbounded growth under extreme collision or high-load scenarios.
+/// Typical values: 50-100 packets for normal operation, >200 indicates potential issues.
+pub const MAX_AIRTIME_WAITING_PACKETS: usize = 500;
+
+/// Warning threshold - log warnings when airtime packets exceed this percentage.
+const AIRTIME_CAPACITY_WARNING_THRESHOLD: f32 = 0.8; // 80%
+
 impl Node {
     /// Push a message into this node's bounded history, popping the oldest if
     /// at capacity.
@@ -226,5 +234,35 @@ impl Node {
             self.node_messages.pop_front();
         }
         self.node_messages.push_back(msg);
+    }
+
+    /// Push an airtime waiting packet with capacity checking and overflow warning.
+    /// Returns true if the packet was added, false if capacity was exceeded.
+    pub fn push_airtime_packet(&mut self, packet: AirtimeWaitingPacket) -> bool {
+        if self.airtime_waiting_packets.len() >= MAX_AIRTIME_WAITING_PACKETS {
+            log::error!(
+                "Node {} airtime packet queue overflow! Capacity: {}/{}, dropping oldest packets",
+                self.node_id,
+                self.airtime_waiting_packets.len(),
+                MAX_AIRTIME_WAITING_PACKETS
+            );
+            // Emergency cleanup: remove oldest processed packets
+            self.airtime_waiting_packets.retain(|p| !p.processed);
+
+            // If still at capacity, remove oldest unprocessed (should rarely happen)
+            if self.airtime_waiting_packets.len() >= MAX_AIRTIME_WAITING_PACKETS {
+                self.airtime_waiting_packets.remove(0);
+            }
+        } else if self.airtime_waiting_packets.len() as f32 >= (MAX_AIRTIME_WAITING_PACKETS as f32 * AIRTIME_CAPACITY_WARNING_THRESHOLD) {
+            log::warn!(
+                "Node {} airtime packet queue approaching capacity: {}/{}",
+                self.node_id,
+                self.airtime_waiting_packets.len(),
+                MAX_AIRTIME_WAITING_PACKETS
+            );
+        }
+
+        self.airtime_waiting_packets.push(packet);
+        true
     }
 }
