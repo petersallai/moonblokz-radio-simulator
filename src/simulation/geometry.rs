@@ -22,6 +22,10 @@ use super::types::{Obstacle, Point, RectPos, CirclePos};
 /// # Returns
 ///
 /// The squared distance (dx² + dy²) as a float.
+///
+/// # Safety
+/// Assumes world coordinates in range 0..=10000. For larger coordinates,
+/// use f64 or switched to squared-distance comparisons throughout.
 pub fn distance2(a: &Point, b: &Point) -> f32 {
     let dx = a.x as f32 - b.x as f32;
     let dy = a.y as f32 - b.y as f32;
