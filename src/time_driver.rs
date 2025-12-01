@@ -82,6 +82,14 @@ fn real_now() -> StdInstant {
 
 /// Map a real (host) timestamp to virtual Embassy ticks using the current
 /// scale and origins. Preserves continuity across speed changes by construction.
+///
+/// The mapping formula is:
+/// ```text
+/// virtual_ticks = origin_virtual + (real_elapsed_ticks * scale)
+/// ```
+///
+/// This ensures that changing the speed scale only affects future time advancement,
+/// not already-scheduled deadlines (origin_virtual remains fixed during speed changes).
 fn map_real_to_virtual(r: StdInstant) -> u64 {
     let clock_lock = clock().lock().unwrap();
     let real_dt = r.saturating_duration_since(clock_lock.origin_real);
@@ -91,8 +99,18 @@ fn map_real_to_virtual(r: StdInstant) -> u64 {
 }
 
 /// Map a virtual Embassy tick target back to a real (host) timestamp.
+///
+/// Inverse operation of `map_real_to_virtual`. The formula is:
+/// ```text
+/// real_time = origin_real + (virtual_delta / scale)
+/// ```
+///
 /// If the target is before the current virtual origin (due to a rebase), it is
-/// treated as “due now” to avoid underflow and absurd waits.
+/// treated as "due now" to avoid underflow and absurd waits.
+///
+/// This can happen when speed changes move origin_virtual past old deadlines,
+/// but we intentionally keep origin_virtual fixed and only adjust origin_real
+/// to preserve continuity and prevent negative virtual deltas.
 fn map_virtual_to_real(v_target: u64) -> StdInstant {
     let clock_lock = clock().lock().unwrap();
     // If rebasing moved origin_virtual_ticks past v_target, treat it as due now instead of wrapping
@@ -109,6 +127,10 @@ fn map_virtual_to_real(v_target: u64) -> StdInstant {
 }
 
 /// Start the dedicated scheduler thread once. Safe to call repeatedly.
+///
+/// The scheduler thread is responsible for waking Embassy async tasks when their
+/// virtual deadlines are reached. It runs in a loop, waiting for the next due time
+/// and waking all tasks scheduled for that time.
 fn ensure_scheduler_thread() {
     SCHEDULER_STARTED.get_or_init(|| {
         std::thread::Builder::new()

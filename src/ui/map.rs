@@ -1,4 +1,29 @@
-// Central map: Display nodes, obstacles, and radio indicators
+//! # Central Map Visualization
+//!
+//! This module renders the main 2D map view showing:
+//! - A grid representing the 10000×10000 world coordinate system
+//! - Obstacles (circles and rectangles) that block radio signals
+//! - Nodes as colored circles with optional ID labels
+//! - Selected node with a semi-transparent radio range indicator
+//! - Animated radio transmission pulses expanding from transmitting nodes
+//!
+//! ## Coordinate Mapping
+//!
+//! The simulation uses world coordinates (0..=10000 for both X and Y axes).
+//! These are linearly mapped to screen pixels using `egui::lerp`, maintaining
+//! aspect ratio by using a square viewport centered in the available space.
+//!
+//! ## Radio Transmission Animation
+//!
+//! When a node transmits, an animated indicator shows a colored circle expanding
+//! from the node to its effective radio range over 1 second, fading from fully
+//! opaque to transparent. The color indicates the message type.
+//!
+//! ## Node Selection
+//!
+//! Clicking on the map selects the nearest node (using squared distance for
+//! efficiency). Selecting a node triggers a `RequestNodeInfo` command to populate
+//! the right panel inspector with that node's message history.
 
 use eframe::egui;
 use egui::Color32;
@@ -7,6 +32,18 @@ use crate::simulation::Obstacle;
 use crate::ui::{AppState, UICommand};
 use crate::ui::app_state::{color_for_message_type, NODE_RADIO_TRANSFER_INDICATOR_TIMEOUT};
 
+/// Render the central map panel showing the simulation world.
+///
+/// This is the main rendering function for the map. It:
+/// 1. Reserves a square drawing area centered in the available space
+/// 2. Draws the background and coordinate grid
+/// 3. Renders obstacles, then nodes, then selection indicators
+/// 4. Handles mouse clicks for node selection
+///
+/// # Parameters
+///
+/// * `ctx` - egui context for rendering
+/// * `state` - Mutable application state for updating selection
 pub fn render(ctx: &egui::Context, state: &mut AppState) {
     egui::CentralPanel::default().show(ctx, |ui| {
         ui.heading("Map");
@@ -43,6 +80,15 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
     });
 }
 
+/// Draw the coordinate grid lines every 1000 world units.
+///
+/// Renders dark blue lines to help visualize scale and position on the map.
+///
+/// # Parameters
+///
+/// * `painter` - egui painter for drawing primitives
+/// * `rect` - The screen-space rectangle representing the map area
+/// * `_ui` - egui UI context (currently unused)
 fn draw_grid(painter: &egui::Painter, rect: egui::Rect, _ui: &egui::Ui) {
     let grid_color = Color32::from_rgb(0, 0, 100);
     let grid_stroke = egui::Stroke::new(1.0, grid_color);
@@ -57,6 +103,16 @@ fn draw_grid(painter: &egui::Painter, rect: egui::Rect, _ui: &egui::Ui) {
     }
 }
 
+/// Draw all obstacles (rectangles and circles) on the map.
+///
+/// Obstacles are rendered as white filled shapes with white outlines.
+/// They represent physical barriers that block line-of-sight radio propagation.
+///
+/// # Parameters
+///
+/// * `painter` - egui painter for drawing
+/// * `rect` - The screen-space map rectangle
+/// * `obstacles` - List of obstacles to render
 fn draw_obstacles(painter: &egui::Painter, rect: egui::Rect, obstacles: &[Obstacle]) {
     let obstacle_fill = Color32::from_rgba_unmultiplied(255, 255, 255, 255);
     let obstacle_stroke = egui::Stroke::new(1.5, Color32::from_rgb(255, 255, 255));
@@ -95,6 +151,18 @@ fn draw_obstacles(painter: &egui::Painter, rect: egui::Rect, obstacles: &[Obstac
     }
 }
 
+/// Draw all nodes as colored circles with optional ID labels.
+///
+/// Nodes that were reached during a measurement are rendered in green,
+/// while others use the default theme color. Expired radio transmission
+/// indicators are cleaned up during this pass.
+///
+/// # Parameters
+///
+/// * `painter` - egui painter
+/// * `rect` - Screen-space map rectangle
+/// * `state` - Application state (for indicators and node data)
+/// * `ui` - UI context for text rendering
 fn draw_nodes(painter: &egui::Painter, rect: egui::Rect, state: &mut AppState, ui: &egui::Ui) {
     let radius = 4.0;
     
@@ -141,6 +209,19 @@ fn draw_nodes(painter: &egui::Painter, rect: egui::Rect, state: &mut AppState, u
     }
 }
 
+/// Draw an animated radio transmission indicator for a node.
+///
+/// The indicator shows as an expanding, fading circle representing the RF transmission.
+/// The animation lasts 1 second, growing from the node to its effective distance while
+/// fading from full opacity to transparent. Color indicates message type.
+///
+/// # Parameters
+///
+/// * `painter` - egui painter
+/// * `rect` - Screen-space map rectangle
+/// * `state` - Application state (for indicator data)
+/// * `pos` - Screen position of the transmitting node
+/// * `node_id` - ID of the node to check for active indicators
 fn draw_radio_indicator(painter: &egui::Painter, rect: egui::Rect, state: &AppState, pos: &egui::Pos2, node_id: u32) {
     if let Some((expiry, message_type, distance)) = state.node_radio_transfer_indicators.get(&node_id) {
         let remaining = *expiry - std::time::Instant::now();
@@ -157,6 +238,16 @@ fn draw_radio_indicator(painter: &egui::Painter, rect: egui::Rect, state: &AppSt
     }
 }
 
+/// Draw the effective radio range for the selected node.
+///
+/// Renders a semi-transparent blue circle showing the maximum distance
+/// at which this node can communicate under ideal conditions.
+///
+/// # Parameters
+///
+/// * `painter` - egui painter
+/// * `rect` - Screen-space map rectangle
+/// * `selected_node` - The currently selected node
 fn draw_radio_range(painter: &egui::Painter, rect: egui::Rect, selected_node: &crate::ui::NodeUIState) {
     let pos = egui::pos2(
         egui::lerp(rect.left()..=rect.right(), selected_node.position.x as f32 / 10000f32),
@@ -170,6 +261,17 @@ fn draw_radio_range(painter: &egui::Painter, rect: egui::Rect, selected_node: &c
     painter.circle_filled(pos, radius, Color32::from_rgba_unmultiplied(0, 128, 255, 50));
 }
 
+/// Handle mouse clicks on the map for node selection.
+///
+/// Finds the nearest node to the click position using squared distance (to avoid sqrt).
+/// If a node is clicked again, it is deselected. Selecting a node sends a
+/// `RequestNodeInfo` command to populate the inspector panel.
+///
+/// # Parameters
+///
+/// * `response` - egui response from the map interaction area
+/// * `rect` - Screen-space map rectangle
+/// * `state` - Mutable application state for updating selection
 fn handle_node_selection(response: &egui::Response, rect: egui::Rect, state: &mut AppState) {
     if response.clicked() {
         if let Some(click_pos) = response.interact_pointer_pos() {

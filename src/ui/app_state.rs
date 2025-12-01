@@ -1,4 +1,23 @@
-// Application state management for the MoonBlokz Radio Simulator UI
+//! # Application State Management
+//!
+//! This module implements the central `AppState` struct which manages all UI state
+//! and coordinates the rendering of all UI components. It implements the `eframe::App`
+//! trait to integrate with the egui application framework.
+//!
+//! ## Responsibilities
+//!
+//! - Manages the complete UI state (nodes, obstacles, selection, metrics)
+//! - Processes incoming messages from the simulation via `ui_refresh_rx`
+//! - Sends user commands to the simulation via `ui_command_tx`
+//! - Coordinates rendering of all UI panels (top, right, map)
+//! - Manages the 50 FPS render loop via `request_repaint_after`
+//! - Persists user settings (last directory) across application sessions
+//!
+//! ## State Management
+//!
+//! The AppState uses an immediate-mode UI paradigm where the entire interface is
+//! rebuilt every frame. State is updated by consuming messages from the simulation
+//! and then rendered by delegating to specialized panel render functions.
 
 use eframe::egui;
 use egui::Color32;
@@ -11,59 +30,131 @@ use std::time::Instant;
 use super::{NodeInfo, NodeUIState, UICommand, UIRefreshState, mode_selector};
 use crate::simulation::Obstacle;
 
+/// Duration (in milliseconds) that a radio transmission indicator remains visible on the map.
+/// The indicator fades from full opacity to transparent over this period.
 pub const NODE_RADIO_TRANSFER_INDICATOR_TIMEOUT: u64 = 1000;
+/// Duration constant as a `std::time::Duration` for easy comparison with timestamps.
 pub const NODE_RADIO_TRANSFER_INDICATOR_DURATION: Duration = Duration::from_millis(NODE_RADIO_TRANSFER_INDICATOR_TIMEOUT);
 
+/// Central application state managing all UI components and simulation coordination.
+///
+/// This struct maintains all state needed for rendering the UI and coordinates
+/// communication between the user interface and the simulation backend. It is
+/// rebuilt every frame (immediate mode) but maintains persistent state between frames.
 pub struct AppState {
+    /// Optional alert message to display in a modal dialog.
     pub alert: Option<String>,
+    /// Receiver for UI refresh messages from the simulation.
     pub ui_refresh_rx: crate::UIRefreshQueueReceiver,
+    /// Sender for commands from the UI to the simulation.
     pub ui_command_tx: crate::UICommandQueueSender,
-    // Mode selection
+
+    // Mode selection state
+    /// Mode selector component for choosing simulation/tracking/log mode.
     pub mode_selector: mode_selector::ModeSelector,
+    /// Whether the user has selected a mode (determines if mode selector is shown).
     pub mode_selected: bool,
-    // Map state
+
+    // Map visualization state
+    /// Index of the currently selected node in the `nodes` vector, if any.
     pub selected: Option<usize>,
+    /// All nodes in the scene with their positions and radio ranges.
     pub nodes: Vec<NodeUIState>,
+    /// All obstacles (walls, circles) in the scene.
     pub obstacles: Vec<Obstacle>,
+    /// Active radio transmission indicators: node_id -> (expiry_time, message_type, distance).
     pub node_radio_transfer_indicators: HashMap<u32, (Instant, u8, u32)>,
+    /// Detailed info for the selected node (messages, statistics).
     pub node_info: Option<NodeInfo>,
+
+    // Timing and metrics
+    /// Simulation start time (virtual time, scaled by time driver).
     pub start_time: embassy_time::Instant,
+    /// Last time the node info was refreshed (real time, for throttling updates).
     pub last_node_info_update: Instant,
+    /// Total packets sent across all nodes.
     pub total_sent_packets: u64,
+    /// Total packets successfully received across all nodes.
     pub total_received_packets: u64,
+    /// Total packet collisions detected.
     pub total_collision: u64,
+    /// Current simulation delay in milliseconds (0 = no delay warning).
     pub simulation_delay: u32,
+
+    // Measurement state
+    /// Unique identifier for the current measurement (0 = no active measurement).
     pub measurement_identifier: u32,
+    /// Set of node IDs reached during the current measurement.
     pub reached_nodes: HashSet<u32>,
+    /// Virtual time when the current measurement started.
     pub measurement_start_time: embassy_time::Instant,
+    /// Whether a scene file has been selected (after mode selection).
     pub scene_file_selected: bool,
-    // Persistence: last directory used for scene file chooser
+
+    // Persistence
+    /// Last directory used for file picker (persisted across sessions).
     pub last_open_dir: Option<String>,
+
+    // Statistics
+    /// Count of echo result messages observed.
     pub echo_result_count: u32,
-    // Simulation speed control (percentage)
+
+    // Speed control
+    /// Current simulation speed as a percentage (100 = real-time, 200 = 2x, etc.).
     pub speed_percent: u32,
-    // Auto speed control (network-side scaler)
+    /// Whether automatic speed adjustment is enabled.
     pub auto_speed_enabled: bool,
+
+    // Measurement milestones
+    /// Virtual time when 50% of nodes were reached (seconds).
     pub measurement_50_time: u64,
+    /// Virtual time when 90% of nodes were reached (seconds).
     pub measurement_90_time: u64,
+    /// Virtual time when 100% of nodes were reached (seconds).
     pub measurement_100_time: u64,
+    /// Number of packets sent when 50% distribution was reached.
     pub measurement_50_message_count: u32,
+    /// Number of packets sent when 90% distribution was reached.
     pub measurement_90_message_count: u32,
+    /// Number of packets sent when 100% distribution was reached.
     pub measurement_100_message_count: u32,
+    /// Total elapsed time for the current measurement (seconds).
     pub measurement_total_time: u64,
+    /// Total packets sent during the current measurement.
     pub measurement_total_message_count: u32,
+
+    // Link quality thresholds
+    /// Link quality value considered "poor" (from scoring matrix).
     pub poor_limit: u8,
+    /// Link quality value considered "excellent" (from scoring matrix).
     pub excellent_limit: u8,
-    // Map options
+
+    // Map display options
+    /// Whether to display node IDs as text labels on the map.
     pub show_node_ids: bool,
 }
 
+/// Settings persisted across application sessions.
+///
+/// Currently only stores the last directory used for file selection,
+/// improving UX by remembering the user's working directory.
 #[derive(Default, Serialize, Deserialize)]
 struct PersistedSettings {
     last_open_dir: Option<String>,
 }
 
 impl AppState {
+    /// Create a new AppState, loading persisted settings if available.
+    ///
+    /// # Parameters
+    ///
+    /// * `rx` - Receiver for UI refresh messages from the simulation
+    /// * `tx` - Sender for commands to the simulation
+    /// * `storage` - Optional persistent storage for loading saved settings
+    ///
+    /// # Returns
+    ///
+    /// A fully initialized AppState ready for rendering.
     pub fn new(rx: crate::UIRefreshQueueReceiver, tx: crate::UICommandQueueSender, storage: Option<&dyn eframe::Storage>) -> Self {
         // Load persisted settings if available
         let persisted: PersistedSettings = storage.and_then(|s| eframe::get_value(s, "app_settings")).unwrap_or_default();
@@ -107,6 +198,13 @@ impl AppState {
         }
     }
 
+    /// Open a native file picker dialog for selecting a scene JSON file.
+    ///
+    /// This method displays a file picker filtered to JSON files, starting in the
+    /// last used directory if available. Upon selection, sends a LoadFile command
+    /// to the simulation and updates the last directory for next time.
+    ///
+    /// If the user cancels the picker, returns to the mode selection screen.
     pub fn open_file_selector(&mut self) {
         let mut dialog = rfd::FileDialog::new().add_filter("text", &["json"]);
         if let Some(dir) = &self.last_open_dir {
@@ -128,6 +226,32 @@ impl AppState {
     }
 }
 
+/// Map a message type code to a color for visualization.
+///
+/// Each message type in the MoonBlokz protocol is assigned a distinct color
+/// for easy identification on the map and in the message stream.
+///
+/// # Parameters
+///
+/// * `message_type` - The numeric message type code (1-9)
+/// * `alpha` - Opacity multiplier (0.0 = transparent, 1.0 = fully opaque)
+///
+/// # Returns
+///
+/// An egui Color32 with the specified alpha blended in.
+///
+/// # Message Type Mapping
+///
+/// - 1: Green (Echo Request)
+/// - 2: Yellow (Echo)
+/// - 3: Orange-Brown (Echo Result)
+/// - 4: Blue (Request Block)
+/// - 5: Magenta (Request Block Part)
+/// - 6: Orange (Add Block)
+/// - 7: Cyan (Add Transaction)
+/// - 8: Purple (Request Mempool)
+/// - 9: Pink (Support)
+/// - Unknown: White
 pub fn color_for_message_type(message_type: u8, alpha: f32) -> Color32 {
     match message_type {
         1 => Color32::from_rgba_unmultiplied(0, 255, 0, (alpha * 255.0) as u8),   // Type 1: Green

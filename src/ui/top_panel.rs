@@ -1,8 +1,27 @@
-// Top panel: System metrics and controls
+//! # Top Panel - System Metrics and Controls
+//!
+//! This module renders the fixed-height top panel displaying:
+//! - Column 1: Core system metrics (sim time, node count, throughput, collision rate)
+//! - Column 2: Measurement data (distribution percentage, milestone times, packets/node ratio)
+//! - Column 3: Simulation controls (speed slider, auto-speed checkbox, node ID display)
+//!
+//! The panel uses a 3-column layout to organize information clearly and provides
+//! real-time feedback on simulation performance and network behavior.
 
 use eframe::egui;
 use crate::ui::{AppState, UICommand};
 
+/// Render the top panel with metrics and controls.
+///
+/// Creates a fixed-height (150px) top panel with three columns:
+/// 1. System metrics showing simulation time, node count, and packet statistics
+/// 2. Measurement data showing distribution progress and milestone times
+/// 3. Control widgets for adjusting simulation speed and display options
+///
+/// # Parameters
+///
+/// * `ctx` - egui context
+/// * `state` - Mutable application state for reading metrics and updating controls
 pub fn render(ctx: &egui::Context, state: &mut AppState) {
     egui::TopBottomPanel::top("top_metrics").exact_height(150.0).show(ctx, |ui| {
         let throughput_tx = if state.start_time.elapsed().as_secs() > 0 {
@@ -79,6 +98,20 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
     });
 }
 
+/// Render the measurement data column.
+///
+/// Displays current measurement progress including:
+/// - Total measurement time and packet count
+/// - Distribution percentage (what % of nodes have been reached)
+/// - Milestone times (50%, 90%, 100% distribution reached)
+/// - Packets per node ratio for each milestone
+///
+/// Automatically detects and records milestone times as they are reached.
+///
+/// # Parameters
+///
+/// * `ui` - egui UI context
+/// * `state` - Mutable state for updating milestone times
 fn render_measured_data(ui: &mut egui::Ui, state: &mut AppState) {
     let measurement_duration_string = if state.measurement_identifier > 0 {
         let measurement_total_time_with_s = format!("{}s", state.measurement_total_time);
@@ -193,6 +226,19 @@ fn render_measured_data(ui: &mut egui::Ui, state: &mut AppState) {
     });
 }
 
+/// Render the controls column.
+///
+/// Provides interactive widgets for:
+/// - Speed slider (20% - 1000%): Adjust simulation time scaling
+/// - Auto speed checkbox: Enable automatic speed adjustment based on CPU load
+/// - Reset button: Return speed to 100% (real-time)
+/// - Show node IDs checkbox: Toggle node ID labels on the map
+/// - Delay warning: Display if simulation is running behind schedule
+///
+/// # Parameters
+///
+/// * `ui` - egui UI context
+/// * `state` - Mutable state for updating control values
 fn render_controls(ui: &mut egui::Ui, state: &mut AppState) {
     ui.heading("Controls");
     ui.separator();

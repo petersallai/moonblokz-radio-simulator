@@ -35,6 +35,17 @@ use super::geometry::{distance2, distance_from_d2, is_intersect};
 use super::node_task::node_task;
 
 /// Wait for a configuration file path from UI commands.
+///
+/// Blocks until the UI sends a `LoadFile` command containing the scene file path.
+/// Other commands received during this wait are ignored.
+///
+/// # Parameters
+///
+/// * `ui_command_rx` - Receiver for UI commands
+///
+/// # Returns
+///
+/// The file path string for the scene configuration JSON file.
 async fn wait_for_config_file(ui_command_rx: &UICommandQueueReceiver) -> String {
     loop {
         match ui_command_rx.receive().await {
@@ -48,6 +59,18 @@ async fn wait_for_config_file(ui_command_rx: &UICommandQueueReceiver) -> String 
 }
 
 /// Load and parse the scene configuration from a file.
+///
+/// Reads the JSON file, parses it into a Scene struct, and reports errors to the UI
+/// via alerts if file reading or JSON parsing fails.
+///
+/// # Parameters
+///
+/// * `config_file_path` - Path to the scene JSON file
+/// * `ui_refresh_tx` - Channel for sending error alerts to the UI
+///
+/// # Returns
+///
+/// `Some(Scene)` if successful, `None` if file read or parse errors occurred.
 async fn load_scene(config_file_path: &str, ui_refresh_tx: &UIRefreshQueueSender) -> Option<Scene> {
     let file_result = fs::read_to_string(config_file_path)
         .with_context(|| format!("Failed to read file: {config_file_path}"));
@@ -72,6 +95,16 @@ async fn load_scene(config_file_path: &str, ui_refresh_tx: &UIRefreshQueueSender
 }
 
 /// Initialize and publish scene state to the UI.
+///
+/// Sends initial updates to the UI including:
+/// - Link quality threshold values (poor/excellent limits)
+/// - Complete node list with positions and pre-calculated effective radio ranges
+/// - Obstacle list for map rendering
+///
+/// # Parameters
+///
+/// * `scene` - The loaded scene configuration
+/// * `ui_refresh_tx` - Channel for sending UI updates
 async fn initialize_scene_ui(scene: &Scene, ui_refresh_tx: &UIRefreshQueueSender) {
     let scoring_matrix = ScoringMatrix::new_from_encoded(&scene.radio_module_config.scoring_matrix);
     let poor_limit = scoring_matrix.poor_limit;
@@ -106,6 +139,22 @@ async fn initialize_scene_ui(scene: &Scene, ui_refresh_tx: &UIRefreshQueueSender
 }
 
 /// Initialize nodes map and spawn node tasks.
+///
+/// For each node in the scene:
+/// 1. Creates dedicated input/output queues for communication
+/// 2. Spawns an async `node_task` to manage that node's radio stack
+/// 3. Pre-calculates effective radio distance for range checks
+/// 4. Initializes runtime-only fields (message history, event queues)
+///
+/// # Parameters
+///
+/// * `spawner` - Embassy spawner for creating async tasks
+/// * `scene` - The loaded scene configuration
+/// * `nodes_output_channel` - Shared output channel for all nodes
+///
+/// # Returns
+///
+/// HashMap mapping node IDs to their initialized Node structs.
 fn initialize_nodes(
     spawner: &Spawner,
     scene: &Scene,
@@ -142,6 +191,20 @@ fn initialize_nodes(
 }
 
 /// Calculate the next interesting event time (earliest CAD or airtime completion).
+///
+/// Scans all nodes to find the earliest timestamp when something needs processing:
+/// - Airtime windows ending (packet reception evaluation)
+/// - CAD (Channel Activity Detection) windows ending
+///
+/// Returns a time far in the future if no events are pending.
+///
+/// # Parameters
+///
+/// * `nodes_map` - Map of all nodes with their pending events
+///
+/// # Returns
+///
+/// The `Instant` of the next event requiring processing.
 fn calculate_next_event_time(nodes_map: &HashMap<u32, Node>) -> Instant {
     let mut next_event = Instant::now() + Duration::from_secs(3600);
     
@@ -166,6 +229,26 @@ fn calculate_next_event_time(nodes_map: &HashMap<u32, Node>) -> Instant {
 }
 
 /// Handle a radio packet transmission from a node.
+///
+/// Processing steps:
+/// 1. Record the transmission in the sender's message history
+/// 2. Queue the sender's own airtime window (for self-interference modeling)
+/// 3. Update global packet counters and notify UI
+/// 4. Find all target nodes within radio range and not blocked by obstacles
+/// 5. Distribute the packet to each target by queueing their airtime windows
+///
+/// Special handling for AddBlock messages: notifies UI to track measurement progress.
+///
+/// # Parameters
+///
+/// * `node_id` - ID of the transmitting node
+/// * `packet` - The radio packet being transmitted
+/// * `nodes_map` - Mutable map of all nodes
+/// * `scene` - Scene configuration (for propagation parameters)
+/// * `ui_refresh_tx` - Channel for UI updates
+/// * `total_sent_packets` - Mutable counter for total packets sent
+/// * `total_received_packets` - Current count of received packets (for UI update)
+/// * `total_collision` - Current collision count (for UI update)
 async fn handle_radio_transfer(
     node_id: u32,
     packet: RadioPacket,
@@ -252,6 +335,22 @@ async fn handle_radio_transfer(
 }
 
 /// Find all target nodes within radio range and not blocked by obstacles.
+///
+/// Uses squared distance for efficiency (avoiding sqrt in the hot path).
+/// Only nodes within the sender's effective distance AND with clear line-of-sight
+/// (no obstacle intersection) are included.
+///
+/// # Parameters
+///
+/// * `sender_id` - ID of the transmitting node (excluded from targets)
+/// * `sender_position` - 2D position of the sender
+/// * `sender_effective_distance` - Pre-calculated maximum range
+/// * `nodes_map` - Map of all nodes
+/// * `scene` - Scene configuration (for obstacle checks)
+///
+/// # Returns
+///
+/// Vector of node IDs that can receive the transmission.
 fn find_target_nodes(
     sender_id: u32,
     sender_position: &Point,
@@ -279,6 +378,24 @@ fn find_target_nodes(
 }
 
 /// Distribute a packet to all target nodes, computing RSSI and airtime.
+///
+/// For each target node:
+/// 1. Calculate the distance from sender to receiver
+/// 2. Compute received signal strength (RSSI) including path loss and shadowing
+/// 3. Calculate packet airtime based on LoRa parameters
+/// 4. Queue an `AirtimeWaitingPacket` for later collision evaluation
+///
+/// The queued packets are processed by the main event loop when their airtime expires.
+///
+/// # Parameters
+///
+/// * `packet` - The radio packet to distribute
+/// * `sender_id` - ID of the sender (for logging)
+/// * `sender_position` - Sender's 2D position (for distance calculation)
+/// * `sender_radio_strength` - Sender's TX power in dBm
+/// * `target_node_ids` - List of nodes within range
+/// * `nodes_map` - Mutable map of all nodes
+/// * `scene` - Scene configuration (for propagation model)
 fn distribute_packet_to_targets(
     packet: &RadioPacket,
     sender_id: u32,
@@ -311,6 +428,18 @@ fn distribute_packet_to_targets(
 }
 
 /// Process CAD (Channel Activity Detection) requests for all nodes.
+///
+/// CAD is used by nodes to sense if the channel is busy before transmitting.
+/// For each pending CAD request:
+/// 1. Check if any airtime windows overlap with the CAD window
+/// 2. Send CAD response (true if activity detected, false otherwise)
+/// 3. Remove completed CAD items from the waiting list
+///
+/// This models the LoRa CAD feature which detects preambles without full decoding.
+///
+/// # Parameters
+///
+/// * `nodes_map` - Mutable map of all nodes with pending CAD requests
 fn process_cad_requests(nodes_map: &mut HashMap<u32, Node>) {
     let now = Instant::now();
     
@@ -359,6 +488,34 @@ fn find_next_packet_to_process(node: &mut Node) -> Option<(usize, Instant, Insta
 }
 
 /// Process packet reception, including collision detection and SINR calculation.
+///
+/// Determines whether a packet is successfully received by:
+/// 1. Computing total noise (baseline noise floor + interfering signals)
+/// 2. Calculating SINR (Signal to Interference plus Noise Ratio)
+/// 3. Checking for destructive collisions (capture effect)
+/// 4. Comparing SINR against the required SNR limit
+///
+/// ## Collision Detection
+///
+/// - **Preamble lock loss**: Earlier packet above SNR destroys later packet
+/// - **Capture effect**: Later stronger packet (>6dB) captures the receiver
+/// - **Interference**: Overlapping signals add to noise floor
+///
+/// Successful packets are delivered to the node's input queue with link quality.
+/// Collisions are logged to the message history but not delivered.
+///
+/// # Parameters
+///
+/// * `node` - Mutable reference to the receiving node
+/// * `packet_index` - Index of packet in the airtime waiting list
+/// * `packet_start` - When packet transmission started
+/// * `packet_end` - When packet transmission ends
+/// * `packet_rssi` - Received signal strength in dBm
+/// * `scene` - Scene configuration (for SNR limit)
+/// * `total_received_packets` - Counter for successful receptions
+/// * `total_collision` - Counter for detected collisions
+/// * `ui_refresh_tx` - Channel for UI updates
+/// * `total_sent_packets` - Current sent count (for UI)
 async fn process_packet_reception(
     node: &mut Node,
     packet_index: usize,

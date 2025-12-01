@@ -1,14 +1,33 @@
-// Mode selector screen for the MoonBlokz Radio Simulator
-//
-// This screen allows users to choose between three modes:
-// 1. Simulation: Start a simulated network
-// 2. Real-time Tracking: Visualize live network logs
-// 3. Log Visualization: Open previously saved log files
+//! # Mode Selector Screen
+//!
+//! This module provides the initial mode selection interface allowing users to choose
+//! between three operational modes:
+//!
+//! ## Simulation Mode
+//! Start a simulated network based on a pre-defined scene file. This mode runs the
+//! full radio network simulation with configurable nodes, obstacles, and propagation
+//! parameters. Ideal for protocol testing and topology experiments.
+//!
+//! ## Real-time Tracking Mode  
+//! Connect to a live log stream from the log_collector. Visualizes network activity
+//! as it happens on real hardware. Requires both a log file and a scene.json file
+//! defining node positions.
+//!
+//! ## Log Visualization Mode
+//! Open and replay a previously saved log file. Useful for analyzing historical
+//! network behavior and creating reproducible test cases. Also requires a scene.json
+//! file for node positions.
+//!
+//! The mode selector displays three panels with icons, descriptions, and action buttons.
+//! After selection, the application proceeds to file picker dialogs for the required files.
 
 use eframe::egui;
 use egui::Color32;
 use std::sync::Arc;
 
+/// Mode selector UI component managing the initial mode selection screen.
+///
+/// Loads and displays icons for each mode and handles user interaction.
 pub struct ModeSelector {
     simulation_icon: Option<Arc<egui::ColorImage>>,
     realtime_icon: Option<Arc<egui::ColorImage>>,
@@ -16,6 +35,10 @@ pub struct ModeSelector {
 }
 
 impl ModeSelector {
+    /// Create a new mode selector and load embedded icons.
+    ///
+    /// Icons are embedded in the binary and decoded at startup.
+    /// If icon loading fails, placeholder emojis are used instead.
     pub fn new() -> Self {
         // Load icons
         let simulation_icon = Self::load_image(include_bytes!("../../icons/simulation_icon.png"));
@@ -29,6 +52,15 @@ impl ModeSelector {
         }
     }
 
+    /// Load an icon image from embedded PNG bytes.
+    ///
+    /// # Parameters
+    ///
+    /// * `bytes` - Embedded PNG image data
+    ///
+    /// # Returns
+    ///
+    /// `Some(Arc<ColorImage>)` if successful, `None` if decoding fails.
     fn load_image(bytes: &'static [u8]) -> Option<Arc<egui::ColorImage>> {
         match image::load_from_memory(bytes) {
             Ok(img) => {
@@ -170,6 +202,12 @@ impl ModeSelector {
         selection
     }
     
+    /// Render an icon image or placeholder if loading failed.
+    ///
+    /// # Parameters
+    ///
+    /// * `ui` - egui UI context
+    /// * `icon` - Optional icon image to display
     fn render_icon(&self, ui: &mut egui::Ui, icon: &Option<Arc<egui::ColorImage>>) {
         if let Some(color_image) = icon {
             let texture = ui.ctx().load_texture(
@@ -187,6 +225,7 @@ impl ModeSelector {
     }
 }
 
+/// The three operational modes available in the application.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModeSelection {
     Simulation,

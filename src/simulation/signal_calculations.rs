@@ -162,14 +162,24 @@ pub(crate) fn calculate_snr_limit(lora_parameters: &LoraParameters) -> f32 {
 
 pub(crate) fn calculate_air_time(lora_parameters: &LoraParameters, payload_size: usize) -> f32 {
     // LoRa symbol time in seconds: T_sym = 2^SF / BW
+    // This determines how long each symbol takes to transmit
     let symbol_time = 2.0_f32.powi(lora_parameters.spreading_factor as i32) / lora_parameters.bandwidth as f32;
 
     // Include preamble time. Default LoRa preamble is typically 8 symbols.
     // Effective preamble duration: (N_preamble + 4.25) * T_sym
+    // The 4.25 accounts for sync word and frame start overhead
     let preamble_time = (lora_parameters.preamble_symbols + 4.25) * symbol_time;
 
     // Standard LoRa payload symbol calculation (SX127x/LoRa spec)
     // N_payload = 8 + max( ceil((8*PL - 4*SF + 28 + 16*CRC - 20*IH) / (4 * (SF - 2*DE))) * (CR + 4), 0 )
+    // where:
+    // - PL: Payload length in bytes
+    // - SF: Spreading Factor (7-12)
+    // - CRC: 1 if CRC enabled, 0 otherwise
+    // - IH: 0 for explicit header, 1 for implicit header
+    // - DE: 1 if low data rate optimization enabled, 0 otherwise
+    // - CR: Coding rate (1-4 representing 4/5 to 4/8)
+    //
     // Assumptions:
     // - Explicit header mode (IH = 0). If you later support implicit header, add a flag and set IH=1.
     let sf = lora_parameters.spreading_factor as f32;
@@ -184,6 +194,7 @@ pub(crate) fn calculate_air_time(lora_parameters: &LoraParameters, payload_size:
     let base = (numerator / denom).ceil();
     let payload_symbols = 8.0 + (base * (cr + 4.0)).max(0.0);
 
+    // Total airtime is preamble + payload
     preamble_time + payload_symbols * symbol_time
 }
 

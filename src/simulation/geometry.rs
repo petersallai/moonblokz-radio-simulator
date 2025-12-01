@@ -9,6 +9,19 @@
 use super::types::{Obstacle, Point, RectPos, CirclePos};
 
 /// Squared Euclidean distance in world units (avoids a sqrt in hot paths).
+///
+/// Using squared distance is a common optimization when comparing distances,
+/// as we can compare d1² vs d2² without computing the expensive square root.
+/// This is heavily used in range checks: is node B within range of node A?
+///
+/// # Parameters
+///
+/// * `a` - First point
+/// * `b` - Second point
+///
+/// # Returns
+///
+/// The squared distance (dx² + dy²) as a float.
 pub fn distance2(a: &Point, b: &Point) -> f32 {
     let dx = a.x as f32 - b.x as f32;
     let dy = a.y as f32 - b.y as f32;
@@ -21,7 +34,26 @@ pub fn distance_from_d2(d2: f32) -> f32 {
 }
 
 /// Check if a straight line between two points intersects any obstacle.
-/// Degenerate segments (point==point) are treated as a point-inside-obstacle test.
+///
+/// This is the main line-of-sight check used by the radio propagation model.
+/// A transmission from point1 to point2 is blocked if the straight line between
+/// them intersects any obstacle (circle or rectangle).
+///
+/// ## Degenerate Case Handling
+///
+/// If point1 == point2 (degenerate segment), treats it as a point-inside-obstacle
+/// test rather than a segment intersection test.
+///
+/// # Parameters
+///
+/// * `point1` - Start point of the line segment (transmitter position)
+/// * `point2` - End point of the line segment (receiver position)
+/// * `obstacles` - List of all obstacles in the scene
+///
+/// # Returns
+///
+/// `true` if the line intersects any obstacle (line-of-sight blocked),
+/// `false` if clear line-of-sight exists.
 pub fn is_intersect(point1: &Point, point2: &Point, obstacles: &[Obstacle]) -> bool {
     // Early out if degenerate segment
     if point1.x == point2.x && point1.y == point2.y {
@@ -159,6 +191,24 @@ fn on_segment(a: &Point, b: &Point, c: &Point) -> bool {
 }
 
 /// Robust segment–segment intersection including collinear overlap.
+///
+/// Uses the orientation-based algorithm which handles all cases correctly:
+/// - Proper crossing intersection (segments cross at an interior point)
+/// - Endpoint touching (segments meet at an endpoint)
+/// - Collinear overlap (segments lie on the same line and overlap)
+///
+/// The algorithm works by computing orientations of point triplets to determine
+/// if segments are on opposite sides of each other (proper intersection) or if
+/// they have collinear points that lie on the opposite segment.
+///
+/// # Parameters
+///
+/// * `p1`, `q1` - Endpoints of the first segment
+/// * `p2`, `q2` - Endpoints of the second segment
+///
+/// # Returns
+///
+/// `true` if the segments intersect or touch, `false` if they are disjoint.
 pub fn segments_intersect(p1: &Point, q1: &Point, p2: &Point, q2: &Point) -> bool {
     let o1 = orientation(p1, q1, p2);
     let o2 = orientation(p1, q1, q2);

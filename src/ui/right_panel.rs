@@ -1,10 +1,47 @@
-// Right panel: Node inspector and message stream
+//! # Right Panel - Node Inspector and Message Stream
+//!
+//! This module renders the fixed-width right panel displaying detailed information
+//! about the currently selected node, including:
+//! - Node metadata (ID, position, radio strength)
+//! - Message statistics (sent/received counts)
+//! - Complete message history in a scrollable, virtualized table
+//! - Measurement control button (Start/Reset)
+//!
+//! ## Message Table
+//!
+//! The message table uses `egui_extras::TableBuilder` for efficient virtualized rendering.
+//! Only visible rows are rendered, allowing smooth scrolling through thousands of messages.
+//! Messages are displayed newest-first, with color coding:
+//! - Yellow rows: Messages sent by this node
+//! - Green rows: Messages received from other nodes  
+//! - Red rows: Collision detected (packet lost)
+//!
+//! ## Link Quality Visualization
+//!
+//! Link quality values are color-coded based on the scoring matrix thresholds:
+//! - Red: Poor quality (≤ poor_limit)
+//! - Yellow: Medium quality
+//! - Green: Excellent quality (≥ excellent_limit)
 
 use crate::ui::{AppState, UICommand, color_for_message_type};
 use eframe::egui;
 use egui::Color32;
 use std::cmp::max;
 
+/// Render the right inspector panel.
+///
+/// If a node is selected, displays:
+/// 1. Node metadata at the top (ID, position, radio strength)
+/// 2. Statistics (sent/received message counts)
+/// 3. Scrollable message table (virtualized for performance)
+/// 4. Measurement control button at the bottom
+///
+/// If no node is selected, displays a centered prompt to select a node.
+///
+/// # Parameters
+///
+/// * `ctx` - egui context
+/// * `state` - Mutable application state
 pub fn render(ctx: &egui::Context, state: &mut AppState) {
     egui::SidePanel::right("inspector_right").exact_width(400.0).show(ctx, |ui| {
         // Top content (default top-down, left-aligned)
@@ -125,6 +162,25 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
     });
 }
 
+/// Render the virtualized message table for the selected node.
+///
+/// Uses `egui_extras::TableBuilder` to efficiently render only visible rows.
+/// Messages are shown newest-first (reversed order) with columns for:
+/// - Time: Virtual simulation time in seconds
+/// - From: "Sent msg" for outgoing, "#ID" for incoming
+/// - Type: Human-readable message type name
+/// - Packet: "index/total" showing packet sequence
+/// - Size: Packet size in bytes
+/// - LQ: Link quality (0-63), color-coded by threshold
+///
+/// Collision rows are highlighted in red with white text.
+///
+/// # Parameters
+///
+/// * `ui` - egui UI context
+/// * `state` - Application state (for thresholds)
+/// * `node_info` - The selected node's detailed information
+/// * `table_h` - Available height for the table body
 fn render_message_table(ui: &mut egui::Ui, state: &AppState, node_info: &crate::ui::NodeInfo, table_h: f32) {
     use egui_extras::{Column, TableBuilder};
 
