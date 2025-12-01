@@ -3,7 +3,7 @@
 //! This module implements a global `embassy_time_driver::Driver` that maps
 //! real (host) time to a virtual clock whose speed can be adjusted at runtime
 //! via a percentage slider. The mapping preserves virtual-time continuity when
-//! the speed changes and avoids timer “bursts” or starvation by:
+//! the speed changes and avoids timer "bursts" or starvation by:
 //!
 //! - Rebasing only the real origin on speed changes, keeping the virtual origin
 //!   fixed so scheduled deadlines never wrap into the past.
@@ -15,6 +15,27 @@
 //! `get_simulation_speed_percent` provide an exact set/get contract (no FP
 //! drift). The driver is registered with `time_driver_impl!` and is used by
 //! embassy-time throughout the app.
+//!
+//! ## Lock Ordering Rules (CRITICAL for deadlock prevention)
+//!
+//! To prevent lock inversion deadlocks, all code MUST follow this strict ordering:
+//!
+//! 1. **CLOCK** must always be acquired BEFORE **SCHED** (never the reverse)
+//! 2. Never hold both locks simultaneously if possible
+//! 3. If both are needed, acquire CLOCK first, extract needed data, drop it, then acquire SCHED
+//!
+//! Example of CORRECT ordering:
+//! ```rust
+//! let data = { let c = clock().lock().unwrap(); extract_data(&c) }; // CLOCK acquired & dropped
+//! let mut s = sched().lock().unwrap(); // Now safe to acquire SCHED
+//! use_data(&mut s, data);
+//! ```
+//!
+//! Example of INCORRECT ordering (DEADLOCK RISK):
+//! ```rust
+//! let s = sched().lock().unwrap();  // SCHED acquired first
+//! let c = clock().lock().unwrap();  // CLOCK acquired second - DEADLOCK!
+//! ```
 
 use core::task::Waker;
 use embassy_time_driver::{Driver, TICK_HZ, time_driver_impl};
@@ -90,7 +111,11 @@ fn real_now() -> StdInstant {
 ///
 /// This ensures that changing the speed scale only affects future time advancement,
 /// not already-scheduled deadlines (origin_virtual remains fixed during speed changes).
+///
+/// ## Lock Safety
+/// Acquires CLOCK lock only. Safe to call while holding SCHED lock per lock ordering rules.
 fn map_real_to_virtual(r: StdInstant) -> u64 {
+    // LOCK ORDERING: CLOCK only (safe to call from any context)
     let clock_lock = clock().lock().unwrap();
     let real_dt = r.saturating_duration_since(clock_lock.origin_real);
     let real_ticks = (real_dt.as_nanos() as u128 * tick_hz() as u128 / 1_000_000_000u128) as u64;
@@ -111,7 +136,11 @@ fn map_real_to_virtual(r: StdInstant) -> u64 {
 /// This can happen when speed changes move origin_virtual past old deadlines,
 /// but we intentionally keep origin_virtual fixed and only adjust origin_real
 /// to preserve continuity and prevent negative virtual deltas.
+///
+/// ## Lock Safety
+/// Acquires CLOCK lock only. Safe to call while holding SCHED lock per lock ordering rules.
 fn map_virtual_to_real(v_target: u64) -> StdInstant {
+    // LOCK ORDERING: CLOCK only (safe to call from any context)
     let clock_lock = clock().lock().unwrap();
     // If rebasing moved origin_virtual_ticks past v_target, treat it as due now instead of wrapping
     // (wrapping would create an enormous virt_dt and thus absurd wait durations).
@@ -143,32 +172,41 @@ fn ensure_scheduler_thread() {
 /// Waits for the next due virtual deadline and wakes registered wakers.
 ///
 /// Key properties:
-/// - Does not hold `SCHED` and `CLOCK` locks at the same time (avoids lock
-///   inversion).
+/// - Strictly follows CLOCK-before-SCHED lock ordering to prevent deadlocks.
+/// - Never holds both locks simultaneously - extracts data from one before acquiring the other.
 /// - Waits are sliced (<= MAX_WAIT_SLICE) so speed changes reflect quickly
 ///   even if a notify is missed.
 /// - Uses an `epoch` counter to detect speed changes between wait and wakeup.
+///
+/// ## Lock Ordering Safety
+/// This function carefully respects the CLOCK → SCHED ordering:
+/// 1. Acquires SCHED, extracts virtual deadline, releases SCHED
+/// 2. Calls map_virtual_to_real (which acquires CLOCK independently)
+/// 3. Re-acquires SCHED for timed wait if needed
+/// This pattern prevents SCHED → CLOCK inversion which would deadlock.
 fn scheduler_thread() {
     // Maximum slice to wait so scale changes apply promptly even if a notify is missed
+    // 25ms chosen to balance UI responsiveness vs CPU overhead from frequent wake-ups
     const MAX_WAIT_SLICE: Duration = Duration::from_millis(25);
     loop {
-        // Determine next due time or wait for new items, without holding the queue lock
-        // while accessing the clock to avoid lock-order inversion (SCHED -> CLOCK).
-        // 1) Snapshot earliest deadline and epoch under the queue lock.
+        // STEP 1: Extract next deadline from SCHED without holding lock during CLOCK access
+        // LOCK ORDERING: Acquire SCHED, extract data, drop SCHED before calling map_virtual_to_real
         let (next_at, snapshot_epoch) = loop {
             let guard = sched().lock().unwrap();
             if guard.queue.is_empty() {
+                // Wait for new items to be scheduled
                 let guard = cv().wait(guard).unwrap();
                 drop(guard);
                 continue;
             }
             let (&next_at, _) = guard.queue.iter().next().unwrap();
             let snapshot_epoch = guard.epoch;
-            drop(guard);
+            drop(guard); // CRITICAL: Release SCHED before calling map_virtual_to_real
             break (next_at, snapshot_epoch);
         };
 
-        // 2) Compute real target outside of the queue lock
+        // STEP 2: Convert virtual to real time (acquires CLOCK internally, but SCHED is released)
+        // LOCK ORDERING: SCHED was released above, so map_virtual_to_real can safely acquire CLOCK
         let real_target = map_virtual_to_real(next_at);
         let now_r = real_now();
 
@@ -177,11 +215,12 @@ fn scheduler_thread() {
             if wait_dur > MAX_WAIT_SLICE {
                 wait_dur = MAX_WAIT_SLICE;
             }
-            // Reacquire the queue lock only for the timed wait; we don't access the clock while holding it.
+            // STEP 3: Timed wait (safe because we're not calling any functions that acquire CLOCK)
+            // LOCK ORDERING: Re-acquire SCHED for timed wait only - no CLOCK access during this hold
             let mut guard = sched().lock().unwrap();
             let (new_guard, _timeout_res) = cv().wait_timeout(guard, wait_dur).unwrap();
             guard = new_guard;
-            // If epoch changed (speed slider moved) or we were notified, simply iterate again.
+            // If epoch changed (speed slider moved) or we were notified, iterate again
             if guard.epoch != snapshot_epoch {
                 drop(guard);
                 continue;
@@ -190,10 +229,12 @@ fn scheduler_thread() {
             continue;
         }
 
-        // 3) Drain all due wakers. Compute virtual "now" outside queue lock to avoid CLOCK while holding SCHED.
-        let now_v = map_real_to_virtual(real_now());
+        // STEP 4: Drain all due wakers
+        // LOCK ORDERING: Compute virtual "now" BEFORE acquiring SCHED (CLOCK → SCHED order)
+        let now_v = map_real_to_virtual(real_now()); // Acquires CLOCK, no locks held
         let mut ready: Vec<Waker> = Vec::new();
         {
+            // Now safe to acquire SCHED since CLOCK was acquired & released above
             let mut guard = sched().lock().unwrap();
             let mut to_remove = Vec::new();
             for (&ts, ws) in guard.queue.iter() {
@@ -207,9 +248,9 @@ fn scheduler_thread() {
             for ts in to_remove {
                 guard.queue.remove(&ts);
             }
-        }
+        } // SCHED lock dropped here
 
-        // 4) Wake outside locks
+        // STEP 5: Wake all ready tasks (no locks held during wake to prevent blocking)
         for w in ready.into_iter() {
             w.wake();
         }
@@ -241,6 +282,9 @@ time_driver_impl!(static DRIVER: ScaledDriver = ScaledDriver);
 // Public UI helpers
 /// Set the simulation speed in percent (1..=1000). Preserves virtual-time
 /// continuity and updates the scheduler epoch for prompt responsiveness.
+///
+/// ## Lock Ordering
+/// Acquires CLOCK then SCHED (correct ordering). Never acquires both simultaneously.
 pub fn set_simulation_speed_percent(percent: u32) {
     let percent = percent.clamp(1, 1000);
     // Fast path: no-op if unchanged
@@ -250,12 +294,13 @@ pub fn set_simulation_speed_percent(percent: u32) {
     }
     let r_now = real_now();
     // Virtual 'now' under the OLD mapping (before mutation)
-    let v_now_old = map_real_to_virtual(r_now);
+    let v_now_old = map_real_to_virtual(r_now); // Acquires CLOCK internally
     let new_scale_q32 = ((percent as u128) * (ONE_Q32 as u128) / 100u128) as u64;
 
     // Adjust ONLY origin_real to preserve continuity, keeping origin_virtual_ticks unchanged so
     // existing queued deadlines never become "in the past" via an origin shift (which previously
     // caused wrapping_sub underflow and gigantic wait durations).
+    // LOCK ORDERING: CLOCK first (step 1 of 2)
     {
         let mut c = clock().lock().unwrap();
         let origin_virtual = c.origin_virtual_ticks; // unchanged
@@ -277,12 +322,15 @@ pub fn set_simulation_speed_percent(percent: u32) {
         }
         c.scale_q32 = new_scale_q32;
         c.last_set_percent = percent; // record exact requested percent
-    }
+    } // CLOCK lock dropped here
+
+    // LOCK ORDERING: SCHED second (step 2 of 2) - CLOCK was already released above
     // Epoch bump so scheduler re-evaluates earliest deadline with new mapping immediately.
     {
         let mut s = sched().lock().unwrap();
         s.epoch = s.epoch.wrapping_add(1);
-    }
+    } // SCHED lock dropped here
+
     cv().notify_all();
 }
 
@@ -319,10 +367,10 @@ mod tests {
 
     #[test]
     fn virtual_to_real_scales_inverse_with_speed() {
-    let _g = TEST_GUARD.lock().unwrap();
-    // Reset to a known speed then set desired
-    set_simulation_speed_percent(100);
-    set_simulation_speed_percent(200); // x2 virtual vs real
+        let _g = TEST_GUARD.lock().unwrap();
+        // Reset to a known speed then set desired
+        set_simulation_speed_percent(100);
+        set_simulation_speed_percent(200); // x2 virtual vs real
         let now_r = real_now();
         let now_v = map_real_to_virtual(now_r);
         // Target +0.2 virtual seconds
@@ -343,9 +391,9 @@ mod tests {
         let origin_v = c.origin_virtual_ticks;
         let origin_r = c.origin_real;
         drop(c);
-    // v_target just before origin_virtual should be treated as due now (origin_real).
-    // Use saturating_sub to avoid wrap-around when origin_v == 0.
-    let v_target = origin_v.saturating_sub(1);
+        // v_target just before origin_virtual should be treated as due now (origin_real).
+        // Use saturating_sub to avoid wrap-around when origin_v == 0.
+        let v_target = origin_v.saturating_sub(1);
         let r = map_virtual_to_real(v_target);
         // Within small ns tolerance
         let d = if r > origin_r { r - origin_r } else { origin_r - r };

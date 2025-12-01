@@ -120,7 +120,8 @@ fn main() {
     // Create communication channels using Box::leak to satisfy 'static lifetime requirements.
     // These channels coordinate between the UI thread and the Embassy executor thread.
     // The leak is intentional and safe here: these channels live for the entire program lifetime
-    // and are automatically cleaned up when the process terminates.
+    // and are automatically cleaned up when the process terminates. This solution is required to
+    // satisfy the 'static lifetime constraints of the Embassy executor and UI tasks.
     let ui_refresh_channel: &'static UIRefreshQueue = Box::leak(Box::new(UIRefreshQueue::new()));
     let ui_command_channel: &'static UICommandQueue = Box::leak(Box::new(UICommandQueue::new()));
 
