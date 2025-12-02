@@ -301,6 +301,10 @@ impl eframe::App for AppState {
             }
         }
 
+        // Clean up expired radio transfer indicators to prevent unbounded HashMap growth
+        let now = Instant::now();
+        self.node_radio_transfer_indicators.retain(|_, (expiry_time, _, _)| *expiry_time > now);
+
         while let Ok(msg) = self.ui_refresh_rx.try_receive() {
             match msg {
                 UIRefreshState::Alert(alert_msg) => {

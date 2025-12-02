@@ -231,10 +231,14 @@ fn scheduler_thread() {
 
         // STEP 4: Drain all due wakers
         // LOCK ORDERING: Compute virtual "now" BEFORE acquiring SCHED (CLOCK → SCHED order)
-        let now_v = map_real_to_virtual(real_now()); // Acquires CLOCK, no locks held
+        // CRITICAL: map_real_to_virtual() acquires and releases CLOCK internally.
+        // We MUST ensure CLOCK is fully released before acquiring SCHED below.
+        // Any modification to map_real_to_virtual that holds CLOCK past return
+        // will cause a deadlock here.
+        let now_v = map_real_to_virtual(real_now()); // Acquires & releases CLOCK
         let mut ready: Vec<Waker> = Vec::new();
         {
-            // Now safe to acquire SCHED since CLOCK was acquired & released above
+            // Now safe to acquire SCHED since CLOCK was fully released above
             let mut guard = sched().lock().unwrap();
             let mut to_remove = Vec::new();
             for (&ts, ws) in guard.queue.iter() {

@@ -54,15 +54,15 @@ pub(crate) struct PathLossParameters {
 
 #[derive(Deserialize, Clone)]
 pub(crate) struct LoraParameters {
-    bandwidth: u32,
-    spreading_factor: u8,
-    coding_rate: u32,
+    pub(crate) bandwidth: u32,
+    pub(crate) spreading_factor: u8,
+    pub(crate) coding_rate: u32,
     // Number of preamble symbols (typically 8 for LoRa)
-    preamble_symbols: f32,
+    pub(crate) preamble_symbols: f32,
     // Whether a 16-bit CRC is enabled on the payload
-    crc_enabled: bool,
+    pub(crate) crc_enabled: bool,
     // Low Data Rate Optimization (DE) flag; typically enabled when T_sym >= 16ms
-    low_data_rate_optimization: bool,
+    pub(crate) low_data_rate_optimization: bool,
 }
 
 /// Calculate the path loss (in dB) at a given distance using a log-distance
@@ -161,6 +161,13 @@ pub(crate) fn calculate_snr_limit(lora_parameters: &LoraParameters) -> f32 {
 }
 
 pub(crate) fn calculate_air_time(lora_parameters: &LoraParameters, payload_size: usize) -> f32 {
+    // LoRa maximum payload is typically 255 bytes (SX126x/SX127x standard)
+    const MAX_LORA_PAYLOAD: usize = 255;
+    if payload_size > MAX_LORA_PAYLOAD {
+        log::warn!("Payload size {} exceeds LoRa MTU {}, clamping to maximum", payload_size, MAX_LORA_PAYLOAD);
+        return calculate_air_time(lora_parameters, MAX_LORA_PAYLOAD);
+    }
+
     // LoRa symbol time in seconds: T_sym = 2^SF / BW
     // This determines how long each symbol takes to transmit
     let symbol_time = 2.0_f32.powi(lora_parameters.spreading_factor as i32) / lora_parameters.bandwidth as f32;

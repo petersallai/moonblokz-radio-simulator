@@ -66,6 +66,139 @@ async fn wait_for_config_file(ui_command_rx: &UICommandQueueReceiver) -> String 
 /// # Returns
 ///
 /// `Some(Scene)` if successful, `None` if file read or parse errors occurred.
+/// Validate scene configuration to reject malformed inputs.
+///
+/// Checks for common issues that would cause runtime problems:
+/// - Excessive node count (>10000 causes UI/performance issues)
+/// - Node positions outside world bounds (0-10000)
+/// - Unrealistic radio strength values (outside -30 to +30 dBm)
+/// - Invalid LoRa parameters (SF must be 5-12, bandwidth must be positive)
+/// - Invalid path loss parameters (exponent must be positive)
+/// - Obstacle geometry issues (invalid rectangles, zero-radius circles)
+/// - Duplicate node IDs
+///
+/// # Parameters
+///
+/// * `scene` - The parsed scene to validate
+///
+/// # Returns
+///
+/// `Ok(())` if validation passes, `Err(String)` with error description if validation fails.
+fn validate_scene(scene: &Scene) -> Result<(), String> {
+    // World coordinate bounds as per Obstacle documentation
+    const MAX_WORLD_COORD: u32 = 10000;
+    const MAX_NODES: usize = 10000;
+    const MIN_RADIO_STRENGTH: f32 = -50.0;
+    const MAX_RADIO_STRENGTH: f32 = 50.0;
+
+    // Check node count
+    if scene.nodes.is_empty() {
+        return Err("Scene must contain at least one node".to_string());
+    }
+    if scene.nodes.len() > MAX_NODES {
+        return Err(format!("Node count {} exceeds maximum of {}", scene.nodes.len(), MAX_NODES));
+    }
+
+    // Check for duplicate node IDs
+    let mut node_ids = std::collections::HashSet::new();
+    for node in &scene.nodes {
+        if !node_ids.insert(node.node_id) {
+            return Err(format!("Duplicate node_id found: {}", node.node_id));
+        }
+    }
+
+    // Validate each node
+    for node in &scene.nodes {
+        // Check position bounds
+        if node.position.x > MAX_WORLD_COORD || node.position.y > MAX_WORLD_COORD {
+            return Err(format!(
+                "Node {} position ({}, {}) exceeds world bounds (0-{})",
+                node.node_id, node.position.x, node.position.y, MAX_WORLD_COORD
+            ));
+        }
+
+        // Check radio strength is realistic
+        if node.radio_strength < MIN_RADIO_STRENGTH || node.radio_strength > MAX_RADIO_STRENGTH {
+            return Err(format!(
+                "Node {} radio_strength {} dBm outside realistic range ({} to {} dBm)",
+                node.node_id, node.radio_strength, MIN_RADIO_STRENGTH, MAX_RADIO_STRENGTH
+            ));
+        }
+    }
+
+    // Validate LoRa parameters
+    if scene.lora_parameters.spreading_factor < 5 || scene.lora_parameters.spreading_factor > 12 {
+        return Err(format!("Invalid spreading_factor {}, must be 5-12", scene.lora_parameters.spreading_factor));
+    }
+    if scene.lora_parameters.bandwidth == 0 {
+        return Err("Invalid bandwidth, must be positive".to_string());
+    }
+    if scene.lora_parameters.coding_rate < 1 || scene.lora_parameters.coding_rate > 4 {
+        return Err(format!(
+            "Invalid coding_rate {}, must be 1-4 (representing 4/5 to 4/8)",
+            scene.lora_parameters.coding_rate
+        ));
+    }
+    if scene.lora_parameters.preamble_symbols < 0.0 {
+        return Err("Invalid preamble_symbols, must be non-negative".to_string());
+    }
+
+    // Validate path loss parameters
+    if scene.path_loss_parameters.path_loss_exponent <= 0.0 {
+        return Err("Invalid path_loss_exponent, must be positive".to_string());
+    }
+    if scene.path_loss_parameters.shadowing_sigma < 0.0 {
+        return Err("Invalid shadowing_sigma, must be non-negative".to_string());
+    }
+
+    // Validate obstacles
+    for (idx, obstacle) in scene.obstacles.iter().enumerate() {
+        match obstacle {
+            super::types::Obstacle::Rectangle { position } => {
+                // Check bounds
+                if position.top_left.x > MAX_WORLD_COORD
+                    || position.top_left.y > MAX_WORLD_COORD
+                    || position.bottom_right.x > MAX_WORLD_COORD
+                    || position.bottom_right.y > MAX_WORLD_COORD
+                {
+                    return Err(format!(
+                        "Obstacle {} (rectangle) has coordinates exceeding world bounds (0-{})",
+                        idx, MAX_WORLD_COORD
+                    ));
+                }
+                // Check that top-left is actually top-left and bottom-right is bottom-right
+                if position.top_left.x >= position.bottom_right.x || position.top_left.y >= position.bottom_right.y {
+                    return Err(format!(
+                        "Obstacle {} (rectangle) has invalid geometry: top-left ({}, {}) must be strictly less than bottom-right ({}, {})",
+                        idx, position.top_left.x, position.top_left.y, position.bottom_right.x, position.bottom_right.y
+                    ));
+                }
+            }
+            super::types::Obstacle::Circle { position } => {
+                // Check bounds
+                if position.center.x > MAX_WORLD_COORD || position.center.y > MAX_WORLD_COORD {
+                    return Err(format!(
+                        "Obstacle {} (circle) center ({}, {}) exceeds world bounds (0-{})",
+                        idx, position.center.x, position.center.y, MAX_WORLD_COORD
+                    ));
+                }
+                // Check radius is non-zero and reasonable
+                if position.radius == 0 {
+                    return Err(format!("Obstacle {} (circle) has zero radius", idx));
+                }
+                // Check circle doesn't extend beyond world bounds
+                let max_extent_x = position.center.x.saturating_add(position.radius);
+                let max_extent_y = position.center.y.saturating_add(position.radius);
+                if max_extent_x > MAX_WORLD_COORD || max_extent_y > MAX_WORLD_COORD {
+                    return Err(format!("Obstacle {} (circle) extends beyond world bounds (0-{})", idx, MAX_WORLD_COORD));
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 async fn load_scene(config_file_path: &str, ui_refresh_tx: &UIRefreshQueueSender) -> Option<Scene> {
     let file_result = fs::read_to_string(config_file_path).with_context(|| format!("Failed to read file: {config_file_path}"));
 
@@ -79,13 +212,23 @@ async fn load_scene(config_file_path: &str, ui_refresh_tx: &UIRefreshQueueSender
 
     let result = serde_json::from_str::<Scene>(&data).context("Invalid JSON format");
 
-    match result {
-        Ok(scene) => Some(scene),
+    let scene = match result {
+        Ok(scene) => scene,
         Err(err) => {
             ui_refresh_tx.send(UIRefreshState::Alert(format!("Error parsing config file: {}", err))).await;
-            None
+            return None;
         }
+    };
+
+    // Validate the parsed scene before returning
+    if let Err(validation_error) = validate_scene(&scene) {
+        ui_refresh_tx
+            .send(UIRefreshState::Alert(format!("Invalid scene configuration: {}", validation_error)))
+            .await;
+        return None;
     }
+
+    Some(scene)
 }
 
 /// Initialize and publish scene state to the UI.
