@@ -6,9 +6,9 @@
 //! - Segment-segment intersection with collinear handling
 //! - Distance calculations (squared distance to avoid sqrt in hot paths)
 
-use super::types::{CirclePos, Obstacle, Point, RectPos};
+use super::types::{CirclePos, Obstacle, Point, RectPos, Scene};
 
-/// Squared Euclidean distance in world units (avoids a sqrt in hot paths).
+/// Squared Euclidean distance in meters² (avoids a sqrt in hot paths).
 ///
 /// Using squared distance is a common optimization when comparing distances,
 /// as we can compare d1² vs d2² without computing the expensive square root.
@@ -18,22 +18,47 @@ use super::types::{CirclePos, Obstacle, Point, RectPos};
 ///
 /// * `a` - First point
 /// * `b` - Second point
+/// * `scene` - Scene configuration with pre-calculated scaling factors
 ///
 /// # Returns
 ///
-/// The squared distance (dx² + dy²) as a float.
+/// The squared distance in meters² (dx_meters² + dy_meters²).
 ///
-/// # Safety
-/// Assumes world coordinates in range 0..=10000. For larger coordinates,
-/// use f64 or switched to squared-distance comparisons throughout.
-pub fn distance2(a: &Point, b: &Point) -> f32 {
-    let dx = a.x as f32 - b.x as f32;
-    let dy = a.y as f32 - b.y as f32;
-    dx * dx + dy * dy
+/// # Note
+/// Uses f64 for higher precision to avoid numerical errors with large coordinate spaces.
+/// Applies pre-calculated scale_x and scale_y from scene to handle non-uniform scaling.
+pub fn distance2(a: &Point, b: &Point, scene: &Scene) -> f64 {
+    let dx = a.x - b.x;
+    let dy = a.y - b.y;
+
+    // Apply pre-calculated scaling factors to each component before squaring
+    // This handles non-uniform scaling correctly: each axis scaled independently
+    let dx_meters = dx * scene.scale_x;
+    let dy_meters = dy * scene.scale_y;
+
+    dx_meters * dx_meters + dy_meters * dy_meters
 }
 
-/// Convert squared distance back to distance (only when needed for RSSI calc).
-pub fn distance_from_d2(d2: f32) -> f32 {
+/// Convert squared distance to actual distance in meters.
+///
+/// Takes a squared distance value (already in meters², as returned by distance2())
+/// and computes the square root to get the actual distance.
+///
+/// # Parameters
+///
+/// * `d2` - Squared distance in meters² (from distance2())
+///
+/// # Returns
+///
+/// The actual distance in meters.
+///
+/// # Example
+///
+/// ```
+/// let d2 = distance2(&point_a, &point_b, &scene);  // Returns meters²
+/// let distance = distance_from_d2(d2);              // Returns meters
+/// ```
+pub fn distance_from_d2(d2: f64) -> f64 {
     d2.sqrt()
 }
 

@@ -63,6 +63,14 @@ pub struct Scene {
     pub width: f64,
     /// Height of the world in meters.
     pub height: f64,
+    /// Pre-calculated X-axis scaling factor (meters per world unit).
+    /// Calculated as: width / (world_bottom_right.x - world_top_left.x)
+    #[serde(skip)]
+    pub scale_x: f64,
+    /// Pre-calculated Y-axis scaling factor (meters per world unit).
+    /// Calculated as: height / (world_bottom_right.y - world_top_left.y)
+    #[serde(skip)]
+    pub scale_y: f64,
 }
 
 #[derive(Debug, Clone)]

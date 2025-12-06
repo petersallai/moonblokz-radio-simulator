@@ -212,13 +212,19 @@ async fn load_scene(config_file_path: &str, ui_refresh_tx: &UIRefreshQueueSender
 
     let result = serde_json::from_str::<Scene>(&data).context("Invalid JSON format");
 
-    let scene = match result {
+    let mut scene = match result {
         Ok(scene) => scene,
         Err(err) => {
             ui_refresh_tx.send(UIRefreshState::Alert(format!("Error parsing config file: {}", err))).await;
             return None;
         }
     };
+
+    // Pre-calculate scaling factors for distance calculations
+    let world_width = scene.world_bottom_right.x - scene.world_top_left.x;
+    let world_height = scene.world_bottom_right.y - scene.world_top_left.y;
+    scene.scale_x = scene.width / world_width;
+    scene.scale_y = scene.height / world_height;
 
     // Validate the parsed scene before returning
     if let Err(validation_error) = validate_scene(&scene) {
@@ -465,7 +471,7 @@ async fn handle_radio_transfer(
 ///
 /// Vector of node IDs that can receive the transmission.
 fn find_target_nodes(sender_id: u32, sender_position: &Point, sender_effective_distance: f32, nodes_map: &HashMap<u32, Node>, scene: &Scene) -> Vec<u32> {
-    let eff2 = sender_effective_distance.powi(2);
+    let eff2 = (sender_effective_distance as f64).powi(2);
     let mut target_ids = Vec::new();
 
     for (&other_id, other_node) in nodes_map.iter() {
@@ -473,7 +479,7 @@ fn find_target_nodes(sender_id: u32, sender_position: &Point, sender_effective_d
             continue;
         }
 
-        let d2 = distance2(sender_position, &other_node.position);
+        let d2 = distance2(sender_position, &other_node.position, scene);
         if d2 < eff2 {
             if !is_intersect(sender_position, &other_node.position, &scene.obstacles) {
                 target_ids.push(other_id);
@@ -520,9 +526,8 @@ fn distribute_packet_to_targets(
             None => continue,
         };
 
-        let d2 = distance2(sender_position, &target_node.position);
+        let d2 = distance2(sender_position, &target_node.position, scene);
         let distance = distance_from_d2(d2);
-
         target_node.push_airtime_packet(AirtimeWaitingPacket {
             packet: packet.clone(),
             sender_node_id: sender_id,
