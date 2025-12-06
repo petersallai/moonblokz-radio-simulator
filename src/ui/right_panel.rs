@@ -55,9 +55,9 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
             });
             ui.horizontal(|ui| {
                 ui.label("Position: (");
-                ui.label(egui::RichText::new(format!("{:.2}", p.position.x)).strong());
+                ui.label(egui::RichText::new(format!("{:.5}", p.position.x)).strong());
                 ui.label(",");
-                ui.label(egui::RichText::new(format!("{:.2}", p.position.y)).strong());
+                ui.label(egui::RichText::new(format!("{:.5}", p.position.y)).strong());
                 ui.label(")");
             });
             ui.horizontal(|ui| {

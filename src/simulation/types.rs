@@ -163,13 +163,15 @@ pub struct RectPos {
 pub struct CirclePos {
     #[serde(rename = "center_position")]
     pub center: Point,
+    /// Radius in meters (as specified in the scene JSON file).
     pub radius: f64,
 }
 
 /// Obstacles represented as tagged enum
-/// Obstacles expressed in world coordinates (0..=10000 for both axes). Rectangles
-/// are defined by two corners; circles by center and radius. Intersection checks
-/// are conservative with degenerate segment handling.
+/// Obstacle positions are expressed in world coordinates (0..=10000 for both axes).
+/// Circle radii are specified in meters in the scene files.
+/// Rectangles are defined by two corners; circles by center and radius.
+/// Intersection checks are conservative with degenerate segment handling.
 #[derive(Debug, Deserialize, Clone)]
 #[serde(tag = "type")]
 pub enum Obstacle {

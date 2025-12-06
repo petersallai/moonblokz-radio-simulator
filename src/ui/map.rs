@@ -121,34 +121,50 @@ fn draw_grid(painter: &egui::Painter, rect: egui::Rect, state: &AppState) {
     let world_max_x = state.world_bottom_right.x;
     let world_min_y = state.world_top_left.y;
     let world_max_y = state.world_bottom_right.y;
-    let world_width = world_max_x - world_min_x;
-    let world_height = world_max_y - world_min_y;
+    let world_width = (world_max_x - world_min_x).abs();
+    let world_height = (world_max_y - world_min_y).abs();
 
-    // Divide the longer dimension into 10 cells, use that spacing for both axes (square cells)
-    let grid_spacing = if world_width >= world_height {
-        world_width / 10.0
+    // Divide the longer dimension (in meters) into 10 cells
+    let spacing_meters = if state.width >= state.height {
+        state.width / 10.0
     } else {
-        world_height / 10.0
+        state.height / 10.0
     };
 
-    // Vertical lines
-    let start_x = (world_min_x / grid_spacing).ceil() * grid_spacing;
+    // Convert spacing from meters to world coordinates
+    let scale_x = world_width / state.width;
+    let scale_y = world_height / state.height;
+    let grid_spacing_x = spacing_meters * scale_x;
+    let grid_spacing_y = spacing_meters * scale_y;
+
+    // Vertical lines (handle both normal and inverted X coordinates)
+    let (x_start, x_end) = if world_min_x <= world_max_x {
+        (world_min_x, world_max_x)
+    } else {
+        (world_max_x, world_min_x)
+    };
+    let start_x = (x_start / grid_spacing_x).ceil() * grid_spacing_x;
     let mut x = start_x;
-    while x <= world_max_x {
-        let t = (x - world_min_x) / world_width;
-        let screen_x = egui::lerp(rect.left()..=rect.right(), t as f32);
+    while x <= x_end {
+        let t = ((x - world_min_x).abs() / world_width) as f32;
+        let screen_x = egui::lerp(rect.left()..=rect.right(), t);
         painter.line_segment([egui::pos2(screen_x, rect.top()), egui::pos2(screen_x, rect.bottom())], grid_stroke);
-        x += grid_spacing;
+        x += grid_spacing_x;
     }
 
-    // Horizontal lines
-    let start_y = (world_min_y / grid_spacing).ceil() * grid_spacing;
+    // Horizontal lines (handle both normal and inverted Y coordinates)
+    let (y_start, y_end) = if world_min_y <= world_max_y {
+        (world_min_y, world_max_y)
+    } else {
+        (world_max_y, world_min_y)
+    };
+    let start_y = (y_start / grid_spacing_y).ceil() * grid_spacing_y;
     let mut y = start_y;
-    while y <= world_max_y {
-        let t = (y - world_min_y) / world_height;
-        let screen_y = egui::lerp(rect.top()..=rect.bottom(), t as f32);
+    while y <= y_end {
+        let t = ((y - world_min_y).abs() / world_height) as f32;
+        let screen_y = egui::lerp(rect.top()..=rect.bottom(), t);
         painter.line_segment([egui::pos2(rect.left(), screen_y), egui::pos2(rect.right(), screen_y)], grid_stroke);
-        y += grid_spacing;
+        y += grid_spacing_y;
     }
 }
 /// Draw all obstacles (rectangles and circles) on the map.
@@ -193,11 +209,16 @@ fn draw_obstacles(painter: &egui::Painter, rect: egui::Rect, state: &AppState) {
             Obstacle::Circle { position, .. } => {
                 let cx = egui::lerp(rect.left()..=rect.right(), ((position.center.x - world_min_x) / world_width) as f32);
                 let cy = egui::lerp(rect.top()..=rect.bottom(), ((position.center.y - world_min_y) / world_height) as f32);
-                // Scale radius - use width for X scale and height for Y scale, then average for uniform circle
-                let scale_x = rect.width() / world_width as f32;
-                let scale_y = rect.height() / world_height as f32;
-                let units_to_pixels = (scale_x + scale_y) / 2.0;
-                let r = position.radius as f32 * units_to_pixels;
+
+                // Radius is in meters, convert to pixels:
+                // meters_to_pixels = meters * (pixels / meters)
+                // where pixels/meters = rect_pixels / world_meters
+                let pixels_per_meter_x = rect.width() / state.width as f32;
+                let pixels_per_meter_y = rect.height() / state.height as f32;
+                let avg_pixels_per_meter = (pixels_per_meter_x + pixels_per_meter_y) / 2.0;
+
+                let r = position.radius as f32 * avg_pixels_per_meter;
+
                 let center_px = egui::pos2(cx, cy);
                 painter.circle_filled(center_px, r, obstacle_fill);
                 painter.circle_stroke(center_px, r, obstacle_stroke);
@@ -290,13 +311,11 @@ fn draw_radio_indicator(painter: &egui::Painter, rect: egui::Rect, state: &AppSt
         let remaining = *expiry - std::time::Instant::now();
         if remaining > Duration::from_millis(0) {
             let alpha = (remaining.as_millis() as f32 / NODE_RADIO_TRANSFER_INDICATOR_TIMEOUT as f32).clamp(0.0, 1.0);
-            // Convert world distance to pixels using world dimensions
-            let world_width = state.world_bottom_right.x - state.world_top_left.x;
-            let world_height = state.world_bottom_right.y - state.world_top_left.y;
-            let scale_x = rect.width() / world_width as f32;
-            let scale_y = rect.height() / world_height as f32;
-            let units_to_pixels = (scale_x + scale_y) / 2.0;
-            let radius = (*distance as f32 * units_to_pixels) * (1.0 - alpha);
+            // Distance is in meters, convert to pixels
+            let pixels_per_meter_x = rect.width() / state.width as f32;
+            let pixels_per_meter_y = rect.height() / state.height as f32;
+            let avg_pixels_per_meter = (pixels_per_meter_x + pixels_per_meter_y) / 2.0;
+            let radius = (*distance as f32 * avg_pixels_per_meter) * (1.0 - alpha);
             let color = color_for_message_type(*message_type, alpha);
             painter.circle_stroke(*pos, radius, egui::Stroke::new(1.0, color));
         }
@@ -326,10 +345,11 @@ fn draw_radio_range(painter: &egui::Painter, rect: egui::Rect, selected_node: &c
         egui::lerp(rect.top()..=rect.bottom(), ((selected_node.position.y - world_min_y) / world_height) as f32),
     );
 
-    let scale_x = rect.width() / world_width as f32;
-    let scale_y = rect.height() / world_height as f32;
-    let units_to_pixels = (scale_x + scale_y) / 2.0;
-    let radius = selected_node.radio_strength as f32 * units_to_pixels;
+    // Radio strength is in meters, convert to pixels
+    let pixels_per_meter_x = rect.width() / state.width as f32;
+    let pixels_per_meter_y = rect.height() / state.height as f32;
+    let avg_pixels_per_meter = (pixels_per_meter_x + pixels_per_meter_y) / 2.0;
+    let radius = selected_node.radio_strength as f32 * avg_pixels_per_meter;
     painter.circle_filled(pos, radius, Color32::from_rgba_unmultiplied(0, 128, 255, 50));
 }
 
