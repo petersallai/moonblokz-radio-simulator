@@ -35,5 +35,7 @@
     {"node_id": 3, "position": {"x": 4000, "y": 6000}, "radio_strength": 10},
     {"node_id": 2, "position": {"x": 6000, "y": 4000}, "radio_strength": 10}
   ],
-  "obstacles": []
+  "obstacles": [],
+  "world_top_left": { "x": 0, "y": 0 },
+  "world_bottom_right": { "x": 10000, "y": 10000 }
 }

@@ -826,5 +826,7 @@
       "radio_strength": 2.2712402
     }
   ],
-  "obstacles": []
+  "obstacles": [],
+  "world_top_left": { "x": 0, "y": 0 },
+  "world_bottom_right": { "x": 10000, "y": 10000 }
 }

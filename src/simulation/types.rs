@@ -53,6 +53,12 @@ pub struct Scene {
     pub nodes: Vec<Node>,
     /// Static obstacles used to determine line-of-sight.
     pub obstacles: Vec<Obstacle>,
+    /// Top-left corner of the world coordinate system.
+    #[serde(rename = "world_top_left")]
+    pub world_top_left: Point,
+    /// Bottom-right corner of the world coordinate system.
+    #[serde(rename = "world_bottom_right")]
+    pub world_bottom_right: Point,
 }
 
 #[derive(Debug, Clone)]
