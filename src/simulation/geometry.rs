@@ -6,7 +6,7 @@
 //! - Segment-segment intersection with collinear handling
 //! - Distance calculations (squared distance to avoid sqrt in hot paths)
 
-use super::types::{Obstacle, Point, RectPos, CirclePos};
+use super::types::{CirclePos, Obstacle, Point, RectPos};
 
 /// Squared Euclidean distance in world units (avoids a sqrt in hot paths).
 ///
@@ -99,7 +99,7 @@ pub fn is_intersect(point1: &Point, point2: &Point, obstacles: &[Obstacle]) -> b
 // ---------- Geometry helpers ----------
 
 /// Normalize rectangle corners to (left,right,top,bottom) tuple.
-fn rect_bounds(rect: &RectPos) -> (u32, u32, u32, u32) {
+fn rect_bounds(rect: &RectPos) -> (f64, f64, f64, f64) {
     let left = rect.top_left.x.min(rect.bottom_right.x);
     let right = rect.top_left.x.max(rect.bottom_right.x);
     let top = rect.top_left.y.min(rect.bottom_right.y);
@@ -115,9 +115,9 @@ pub fn point_in_rect(p: &Point, rect: &RectPos) -> bool {
 
 /// Point-inside-circle test using integer-safe math internally.
 pub fn point_in_circle(p: &Point, circle: &CirclePos) -> bool {
-    let dx = p.x as i64 - circle.center.x as i64;
-    let dy = p.y as i64 - circle.center.y as i64;
-    let r2 = (circle.radius as i64) * (circle.radius as i64);
+    let dx = p.x - circle.center.x;
+    let dy = p.y - circle.center.y;
+    let r2 = circle.radius * circle.radius;
     dx * dx + dy * dy <= r2
 }
 
@@ -168,16 +168,16 @@ fn segment_intersects_circle(p1: &Point, p2: &Point, circle: &CirclePos) -> bool
 /// Orientation of ordered triplet (a,b,c): returns 1 if clockwise, -1 if
 /// counter-clockwise, and 0 if collinear.
 fn orientation(a: &Point, b: &Point, c: &Point) -> i32 {
-    let ax = a.x as i64;
-    let ay = a.y as i64;
-    let bx = b.x as i64;
-    let by = b.y as i64;
-    let cx = c.x as i64;
-    let cy = c.y as i64;
+    let ax = a.x;
+    let ay = a.y;
+    let bx = b.x;
+    let by = b.y;
+    let cx = c.x;
+    let cy = c.y;
     let val = (by - ay) * (cx - bx) - (bx - ax) * (cy - by);
-    if val > 0 {
+    if val > 0.0 {
         1
-    } else if val < 0 {
+    } else if val < 0.0 {
         -1
     } else {
         0
@@ -230,47 +230,50 @@ pub fn segments_intersect(p1: &Point, q1: &Point, p2: &Point, q2: &Point) -> boo
 mod tests {
     use super::*;
 
-    fn p(x: u32, y: u32) -> Point {
+    fn p(x: f64, y: f64) -> Point {
         Point { x, y }
     }
 
     #[test]
     fn geometry_point_in_rect_and_circle() {
         let rect = RectPos {
-            top_left: p(10, 10),
-            bottom_right: p(20, 20),
+            top_left: p(10.0, 10.0),
+            bottom_right: p(20.0, 20.0),
         };
-        assert!(point_in_rect(&p(10, 10), &rect));
-        assert!(point_in_rect(&p(15, 15), &rect));
-        assert!(point_in_rect(&p(20, 20), &rect));
-        assert!(!point_in_rect(&p(9, 10), &rect));
+        assert!(point_in_rect(&p(10.0, 10.0), &rect));
+        assert!(point_in_rect(&p(15.0, 15.0), &rect));
+        assert!(point_in_rect(&p(20.0, 20.0), &rect));
+        assert!(!point_in_rect(&p(9.0, 10.0), &rect));
 
-        let circle = CirclePos { center: p(50, 50), radius: 10 };
-        assert!(point_in_circle(&p(50, 50), &circle));
-        assert!(point_in_circle(&p(60, 50), &circle));
-        assert!(!point_in_circle(&p(61, 50), &circle));
+        let circle = CirclePos {
+            center: p(50.0, 50.0),
+            radius: 10.0,
+        };
+        assert!(point_in_circle(&p(50.0, 50.0), &circle));
+        assert!(point_in_circle(&p(60.0, 50.0), &circle));
+        assert!(!point_in_circle(&p(61.0, 50.0), &circle));
     }
 
     #[test]
     fn geometry_segments_intersect_basic_cases() {
-        let a = p(0, 0);
-        let b = p(10, 10);
-        let c = p(0, 10);
-        let d = p(10, 0);
+        let a = p(0.0, 0.0);
+        let b = p(10.0, 10.0);
+        let c = p(0.0, 10.0);
+        let d = p(10.0, 0.0);
         assert!(segments_intersect(&a, &b, &c, &d));
 
         // Collinear overlap
-        let e = p(0, 0);
-        let f = p(10, 0);
-        let g = p(5, 0);
-        let h = p(15, 0);
+        let e = p(0.0, 0.0);
+        let f = p(10.0, 0.0);
+        let g = p(5.0, 0.0);
+        let h = p(15.0, 0.0);
         assert!(segments_intersect(&e, &f, &g, &h));
 
         // Disjoint
-        let i = p(0, 0);
-        let j = p(1, 1);
-        let k = p(2, 2);
-        let l = p(3, 3);
+        let i = p(0.0, 0.0);
+        let j = p(1.0, 1.0);
+        let k = p(2.0, 2.0);
+        let l = p(3.0, 3.0);
         assert!(!segments_intersect(&i, &j, &k, &l));
     }
 
@@ -278,13 +281,13 @@ mod tests {
     fn is_intersect_handles_degenerate_segment() {
         let obstacles = vec![Obstacle::Rectangle {
             position: RectPos {
-                top_left: p(0, 0),
-                bottom_right: p(10, 10),
+                top_left: p(0.0, 0.0),
+                bottom_right: p(10.0, 10.0),
             },
         }];
         // Point inside rectangle → considered intersecting
-        assert!(is_intersect(&p(5, 5), &p(5, 5), &obstacles));
+        assert!(is_intersect(&p(5.0, 5.0), &p(5.0, 5.0), &obstacles));
         // Point outside → not intersecting
-        assert!(!is_intersect(&p(20, 20), &p(20, 20), &obstacles));
+        assert!(!is_intersect(&p(20.0, 20.0), &p(20.0, 20.0), &obstacles));
     }
 }

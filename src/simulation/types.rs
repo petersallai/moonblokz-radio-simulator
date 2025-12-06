@@ -127,8 +127,8 @@ pub struct Node {
 /// Simple 2D point
 #[derive(Debug, Deserialize, Clone)]
 pub struct Point {
-    pub x: u32,
-    pub y: u32,
+    pub x: f64,
+    pub y: f64,
 }
 
 /// Rectangle position with two corners
@@ -145,7 +145,7 @@ pub struct RectPos {
 pub struct CirclePos {
     #[serde(rename = "center_position")]
     pub center: Point,
-    pub radius: u32,
+    pub radius: f64,
 }
 
 /// Obstacles represented as tagged enum

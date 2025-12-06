@@ -86,7 +86,7 @@ async fn wait_for_config_file(ui_command_rx: &UICommandQueueReceiver) -> String 
 /// `Ok(())` if validation passes, `Err(String)` with error description if validation fails.
 fn validate_scene(scene: &Scene) -> Result<(), String> {
     // World coordinate bounds as per Obstacle documentation
-    const MAX_WORLD_COORD: u32 = 10000;
+    const MAX_WORLD_COORD: f64 = 10000.0;
     const MAX_NODES: usize = 10000;
     const MIN_RADIO_STRENGTH: f32 = -50.0;
     const MAX_RADIO_STRENGTH: f32 = 50.0;
@@ -183,12 +183,12 @@ fn validate_scene(scene: &Scene) -> Result<(), String> {
                     ));
                 }
                 // Check radius is non-zero and reasonable
-                if position.radius == 0 {
+                if position.radius == 0.0 {
                     return Err(format!("Obstacle {} (circle) has zero radius", idx));
                 }
                 // Check circle doesn't extend beyond world bounds
-                let max_extent_x = position.center.x.saturating_add(position.radius);
-                let max_extent_y = position.center.y.saturating_add(position.radius);
+                let max_extent_x = position.center.x + position.radius;
+                let max_extent_y = position.center.y + position.radius;
                 if max_extent_x > MAX_WORLD_COORD || max_extent_y > MAX_WORLD_COORD {
                     return Err(format!("Obstacle {} (circle) extends beyond world bounds (0-{})", idx, MAX_WORLD_COORD));
                 }
