@@ -116,6 +116,10 @@ The simulator loads a “Scene” JSON describing the environment and nodes.
 - obstacles: array of tagged enums
   - Rectangle: { "type": "rectangle", "top-left-position": {x,y}, "bottom-right-position": {x,y} }
   - Circle: { "type": "circle", "center_position": {x,y}, "radius": u32 }
+- world_top_left: { x: f64, y: f64 } — Top-left corner of the world coordinate system
+- world_bottom_right: { x: f64, y: f64 } — Bottom-right corner of the world coordinate system
+- width: f64 — Width of the world in meters
+- height: f64 — Height of the world in meters
 
 Minimal example:
 
@@ -152,7 +156,11 @@ Minimal example:
   "obstacles": [
     { "type": "rectangle", "top-left-position": {"x": 1500, "y": 1500}, "bottom-right-position": {"x": 2500, "y": 2500} },
     { "type": "circle", "center_position": {"x": 5000, "y": 5000}, "radius": 400 }
-  ]
+  ],
+  "world_top_left": { "x": 0, "y": 0 },
+  "world_bottom_right": { "x": 10000, "y": 10000 },
+  "width": 10000,
+  "height": 10000
 }
 ```
 

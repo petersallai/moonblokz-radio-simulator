@@ -33,5 +33,7 @@
     { "type": "circle", "center_position": { "x": 5000, "y": 5000 }, "radius": 400}
   ],
   "world_top_left": { "x": 0, "y": 0 },
-  "world_bottom_right": { "x": 10000, "y": 10000 }
+  "world_bottom_right": { "x": 10000, "y": 10000 },
+  "width": 10000,
+  "height": 10000
 }

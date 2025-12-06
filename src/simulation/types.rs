@@ -59,6 +59,10 @@ pub struct Scene {
     /// Bottom-right corner of the world coordinate system.
     #[serde(rename = "world_bottom_right")]
     pub world_bottom_right: Point,
+    /// Width of the world in meters.
+    pub width: f64,
+    /// Height of the world in meters.
+    pub height: f64,
 }
 
 #[derive(Debug, Clone)]
