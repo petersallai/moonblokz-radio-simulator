@@ -25,14 +25,12 @@
     "tx_maximum_random_delay": 200
   },
   "nodes": [
-    {"node_id": 1, "position": {"y": 47.40411, "x": 18.94574}, "radio_strength": 2},
-    {"node_id": 2, "position": {"y": 47.40900, "x": 18.91705}, "radio_strength": 2},
-    {"node_id": 3, "position": {"y": 47.40122, "x": 18.97272}, "radio_strength": 2}
+    {"node_id": 1, "position": {"y": 47.40411, "x": 18.94574}, "radio_strength": 2}
   ],
   "obstacles": [],
-  "world_top_left": { "y": 47.40900, "x": 18.91705 },
-  "world_bottom_right": { "y": 47.40122, "x": 18.97272 },
-  "width": 4200,
-  "height": 900,
+  "world_top_left": { "y": 47.420986466808756, "x": 18.91531635067557 },
+  "world_bottom_right": { "y": 47.39112999411594, "x": 18.967046194277355 },
+  "width": 3800,
+  "height": 3400,
   "background_image": "background.png"
 }
