@@ -141,6 +141,10 @@ pub struct AppState {
     pub width: f64,
     /// Height of the world in meters.
     pub height: f64,
+    /// Optional path to background image for visualization.
+    pub background_image: Option<String>,
+    /// Loaded background image texture for rendering.
+    pub background_image_texture: Option<egui::TextureHandle>,
 }
 
 /// Settings persisted across application sessions.
@@ -208,6 +212,42 @@ impl AppState {
             world_bottom_right: Point { x: 100.0, y: 100.0 },
             width: 1.0,
             height: 1.0,
+            background_image: None,
+            background_image_texture: None,
+        }
+    }
+
+    /// Load a background image from a file path and create an egui texture.
+    ///
+    /// # Parameters
+    ///
+    /// * `ctx` - egui context for creating the texture
+    /// * `path` - Path to the image file
+    ///
+    /// # Returns
+    ///
+    /// `Some(TextureHandle)` if loading succeeds, `None` if it fails.
+    fn load_background_image(ctx: &egui::Context, path: &str) -> Option<egui::TextureHandle> {
+        match std::fs::read(path) {
+            Ok(bytes) => match image::load_from_memory(&bytes) {
+                Ok(img) => {
+                    let rgba = img.to_rgba8();
+                    let size = [rgba.width() as usize, rgba.height() as usize];
+                    let pixels = rgba.as_flat_samples();
+                    let color_image = egui::ColorImage::from_rgba_unmultiplied(size, pixels.as_slice());
+                    let texture = ctx.load_texture("background_image", color_image, egui::TextureOptions::LINEAR);
+                    log::info!("Successfully loaded background image from: {}", path);
+                    Some(texture)
+                }
+                Err(e) => {
+                    log::error!("Failed to decode background image from {}: {}", path, e);
+                    None
+                }
+            },
+            Err(e) => {
+                log::error!("Failed to read background image file {}: {}", path, e);
+                None
+            }
         }
     }
 
@@ -377,6 +417,14 @@ impl eframe::App for AppState {
                     self.world_bottom_right = bottom_right;
                     self.width = width;
                     self.height = height;
+                }
+                UIRefreshState::BackgroundImageUpdated(image_path) => {
+                    self.background_image = image_path.clone();
+                    if let Some(ref path) = image_path {
+                        self.background_image_texture = Self::load_background_image(ctx, path);
+                    } else {
+                        self.background_image_texture = None;
+                    }
                 }
             }
         }

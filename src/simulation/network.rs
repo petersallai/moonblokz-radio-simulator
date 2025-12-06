@@ -220,6 +220,15 @@ async fn load_scene(config_file_path: &str, ui_refresh_tx: &UIRefreshQueueSender
         }
     };
 
+    // If background_image is specified, prepend the scene file's directory
+    if let Some(ref bg_image) = scene.background_image {
+        use std::path::Path;
+        if let Some(parent_dir) = Path::new(config_file_path).parent() {
+            let full_path = parent_dir.join(bg_image);
+            scene.background_image = Some(full_path.to_string_lossy().to_string());
+        }
+    }
+
     // Pre-calculate scaling factors for distance calculations
     let world_width = scene.world_bottom_right.x - scene.world_top_left.x;
     let world_height = scene.world_bottom_right.y - scene.world_top_left.y;
@@ -286,6 +295,11 @@ async fn initialize_scene_ui(scene: &Scene, ui_refresh_tx: &UIRefreshQueueSender
                 scene.height,
             ))
             .await;
+    }
+
+    if let Some(ref bg_image) = scene.background_image {
+        log::info!("Background image specified: {:?}", bg_image);
+        ui_refresh_tx.send(UIRefreshState::BackgroundImageUpdated(Some(bg_image.clone()))).await;
     }
 }
 

@@ -71,6 +71,9 @@ pub struct Scene {
     /// Calculated as: height / (world_bottom_right.y - world_top_left.y)
     #[serde(skip)]
     pub scale_y: f64,
+    /// Optional path to background image for visualization.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background_image: Option<String>,
 }
 
 #[derive(Debug, Clone)]

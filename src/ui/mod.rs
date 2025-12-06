@@ -78,6 +78,7 @@ pub enum UIRefreshState {
     /// Link quality thresholds from the scoring matrix. Parameters: poor limit, excellent limit.
     PoorAndExcellentLimits(u8, u8),
     SceneDimensionsUpdated(Point, Point, f64, f64),
+    BackgroundImageUpdated(Option<String>),
 }
 
 /// UI-specific representation of a node's state.

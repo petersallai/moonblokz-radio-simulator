@@ -84,6 +84,12 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
         // Draw background
         painter.rect_filled(rect, 4.0, ui.visuals().extreme_bg_color);
 
+        // Draw background image if loaded
+        if let Some(ref texture) = state.background_image_texture {
+            let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+            painter.image(texture.id(), rect, uv, Color32::WHITE);
+        }
+
         // Draw grid: dark blue lines every 1000 world units
         draw_grid(&painter, rect, state);
 
