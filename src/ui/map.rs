@@ -103,9 +103,10 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
     });
 }
 
-/// Draw the coordinate grid lines every 1000 world units.
+/// Draw the coordinate grid with square cells.
 ///
-/// Renders dark blue lines to help visualize scale and position on the map.
+/// The longer dimension (width or height) is divided into 10 cells, and that spacing
+/// is used for both axes to create square grid cells. Renders dark blue lines.
 ///
 /// # Parameters
 ///
@@ -115,41 +116,41 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
 fn draw_grid(painter: &egui::Painter, rect: egui::Rect, state: &AppState) {
     let grid_color = Color32::from_rgb(0, 0, 100);
     let grid_stroke = egui::Stroke::new(1.0, grid_color);
-
+    
     let world_min_x = state.world_top_left.x;
     let world_max_x = state.world_bottom_right.x;
     let world_min_y = state.world_top_left.y;
     let world_max_y = state.world_bottom_right.y;
     let world_width = world_max_x - world_min_x;
     let world_height = world_max_y - world_min_y;
-
-    // Draw grid lines every 1000 units
-    let grid_spacing = 1000.0;
-
+    
+    // Divide the longer dimension into 10 cells, use that spacing for both axes (square cells)
+    let grid_spacing = if world_width >= world_height {
+        world_width / 10.0
+    } else {
+        world_height / 10.0
+    };
+    
     // Vertical lines
-    let start_x = ((world_min_x / grid_spacing).ceil() * grid_spacing) as u32;
-    let end_x = world_max_x as u32;
+    let start_x = (world_min_x / grid_spacing).ceil() * grid_spacing;
     let mut x = start_x;
-    while x <= end_x {
-        let t = (x as f64 - world_min_x) / world_width;
+    while x <= world_max_x {
+        let t = (x - world_min_x) / world_width;
         let screen_x = egui::lerp(rect.left()..=rect.right(), t as f32);
         painter.line_segment([egui::pos2(screen_x, rect.top()), egui::pos2(screen_x, rect.bottom())], grid_stroke);
-        x += grid_spacing as u32;
+        x += grid_spacing;
     }
-
+    
     // Horizontal lines
-    let start_y = ((world_min_y / grid_spacing).ceil() * grid_spacing) as u32;
-    let end_y = world_max_y as u32;
+    let start_y = (world_min_y / grid_spacing).ceil() * grid_spacing;
     let mut y = start_y;
-    while y <= end_y {
-        let t = (y as f64 - world_min_y) / world_height;
+    while y <= world_max_y {
+        let t = (y - world_min_y) / world_height;
         let screen_y = egui::lerp(rect.top()..=rect.bottom(), t as f32);
         painter.line_segment([egui::pos2(rect.left(), screen_y), egui::pos2(rect.right(), screen_y)], grid_stroke);
-        y += grid_spacing as u32;
+        y += grid_spacing;
     }
-}
-
-/// Draw all obstacles (rectangles and circles) on the map.
+}/// Draw all obstacles (rectangles and circles) on the map.
 ///
 /// Obstacles are rendered as white filled shapes with white outlines.
 /// They represent physical barriers that block line-of-sight radio propagation.
