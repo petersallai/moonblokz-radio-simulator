@@ -29,6 +29,7 @@ use std::time::Instant;
 
 use super::{NodeInfo, NodeUIState, UICommand, UIRefreshState, mode_selector};
 use crate::simulation::Obstacle;
+use crate::simulation::Point;
 
 /// Duration (in milliseconds) that a radio transmission indicator remains visible on the map.
 /// The indicator fades from full opacity to transparent over this period.
@@ -132,6 +133,14 @@ pub struct AppState {
     // Map display options
     /// Whether to display node IDs as text labels on the map.
     pub show_node_ids: bool,
+    /// Top-left corner of the world coordinate system.
+    pub world_top_left: Point,
+    /// Bottom-right corner of the world coordinate system.
+    pub world_bottom_right: Point,
+    /// Width of the world in meters.
+    pub width: f64,
+    /// Height of the world in meters.
+    pub height: f64,
 }
 
 /// Settings persisted across application sessions.
@@ -195,6 +204,10 @@ impl AppState {
             poor_limit: 0,
             excellent_limit: 0,
             show_node_ids: false,
+            world_top_left: Point { x: 0.0, y: 0.0 },
+            world_bottom_right: Point { x: 100.0, y: 100.0 },
+            width: 1.0,
+            height: 1.0,
         }
     }
 
@@ -358,6 +371,12 @@ impl eframe::App for AppState {
                 UIRefreshState::PoorAndExcellentLimits(poor, excellent) => {
                     self.poor_limit = poor;
                     self.excellent_limit = excellent;
+                }
+                UIRefreshState::SceneDimensionsUpdated(top_left, bottom_right, width, height) => {
+                    self.world_top_left = top_left;
+                    self.world_bottom_right = bottom_right;
+                    self.width = width;
+                    self.height = height;
                 }
             }
         }

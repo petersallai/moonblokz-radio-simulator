@@ -275,6 +275,18 @@ async fn initialize_scene_ui(scene: &Scene, ui_refresh_tx: &UIRefreshQueueSender
 
     // Publish obstacles to the UI
     ui_refresh_tx.send(UIRefreshState::ObstaclesUpdated(scene.obstacles.clone())).await;
+
+    // Publish scene dimensions to the UI
+    {
+        ui_refresh_tx
+            .send(UIRefreshState::SceneDimensionsUpdated(
+                scene.world_top_left.clone(),
+                scene.world_bottom_right.clone(),
+                scene.width,
+                scene.height,
+            ))
+            .await;
+    }
 }
 
 /// Initialize nodes map and spawn node tasks.

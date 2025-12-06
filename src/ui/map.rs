@@ -1,7 +1,7 @@
 //! # Central Map Visualization
 //!
 //! This module renders the main 2D map view showing:
-//! - A grid representing the 10000×10000 world coordinate system
+//! - A grid representing the dynamic world coordinate system
 //! - Obstacles (circles and rectangles) that block radio signals
 //! - Nodes as colored circles with optional ID labels
 //! - Selected node with a semi-transparent radio range indicator
@@ -9,9 +9,9 @@
 //!
 //! ## Coordinate Mapping
 //!
-//! The simulation uses world coordinates (0..=10000 for both X and Y axes).
+//! The simulation uses world coordinates defined by top_left and bottom_right bounds.
 //! These are linearly mapped to screen pixels using `egui::lerp`, maintaining
-//! aspect ratio by using a square viewport centered in the available space.
+//! aspect ratio (from width/height in meters) by fitting the map centered in the available space.
 //!
 //! ## Radio Transmission Animation
 //!
@@ -25,17 +25,17 @@
 //! efficiency). Selecting a node triggers a `RequestNodeInfo` command to populate
 //! the right panel inspector with that node's message history.
 
+use crate::simulation::Obstacle;
+use crate::ui::app_state::{NODE_RADIO_TRANSFER_INDICATOR_TIMEOUT, color_for_message_type};
+use crate::ui::{AppState, UICommand};
 use eframe::egui;
 use egui::Color32;
 use std::time::Duration;
-use crate::simulation::Obstacle;
-use crate::ui::{AppState, UICommand};
-use crate::ui::app_state::{color_for_message_type, NODE_RADIO_TRANSFER_INDICATOR_TIMEOUT};
 
 /// Render the central map panel showing the simulation world.
 ///
 /// This is the main rendering function for the map. It:
-/// 1. Reserves a square drawing area centered in the available space
+/// 1. Reserves a drawing area with proper aspect ratio, centered in the available space
 /// 2. Draws the background and coordinate grid
 /// 3. Renders obstacles, then nodes, then selection indicators
 /// 4. Handles mouse clicks for node selection
@@ -49,30 +49,53 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
         ui.heading("Map");
         ui.separator();
 
-        // Reserve a square drawing area using the smaller of available width/height, centered both horizontally and vertically
+        // Calculate aspect ratio from world dimensions (width/height in meters)
+        let aspect_ratio = if state.height > 0.0 {
+            (state.width / state.height) as f32
+        } else {
+            1.0 // Fallback to square if height is invalid
+        };
+
+        // Reserve a drawing area with proper aspect ratio, centered in available space
         let avail_rect = ui.available_rect_before_wrap();
-        let side = avail_rect.width().min(avail_rect.height());
-        let x = avail_rect.center().x - side / 2.0;
-        let y = avail_rect.center().y - side / 2.0;
-        let rect = egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(side, side));
+        let avail_width = avail_rect.width();
+        let avail_height = avail_rect.height();
+
+        // Calculate best fit dimensions maintaining aspect ratio
+        let (map_width, map_height) = if avail_width / avail_height > aspect_ratio {
+            // Container is wider than map aspect ratio - constrain by height
+            let height = avail_height;
+            let width = height * aspect_ratio;
+            (width, height)
+        } else {
+            // Container is taller than map aspect ratio - constrain by width
+            let width = avail_width;
+            let height = width / aspect_ratio;
+            (width, height)
+        };
+
+        // Center the map in the available space
+        let x = avail_rect.center().x - map_width / 2.0;
+        let y = avail_rect.center().y - map_height / 2.0;
+        let rect = egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(map_width, map_height));
         let response = ui.interact(rect, egui::Id::new("map_canvas"), egui::Sense::click());
         let painter = ui.painter_at(rect);
 
         // Draw background
         painter.rect_filled(rect, 4.0, ui.visuals().extreme_bg_color);
 
-        // Draw grid: dark blue lines every 1000 world units (0..=10000)
-        draw_grid(&painter, rect, ui);
+        // Draw grid: dark blue lines every 1000 world units
+        draw_grid(&painter, rect, state);
 
         // Draw obstacles before nodes so nodes appear on top
-        draw_obstacles(&painter, rect, &state.obstacles);
+        draw_obstacles(&painter, rect, state);
 
         // Draw nodes scaled into rect
         draw_nodes(&painter, rect, state, ui);
 
         // Draw selected node's radio range
         if let Some(selected) = state.selected {
-            draw_radio_range(&painter, rect, &state.nodes[selected]);
+            draw_radio_range(&painter, rect, &state.nodes[selected], state);
         }
 
         // Handle selection by nearest node (squared-distance comparison)
@@ -88,18 +111,41 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
 ///
 /// * `painter` - egui painter for drawing primitives
 /// * `rect` - The screen-space rectangle representing the map area
-/// * `_ui` - egui UI context (currently unused)
-fn draw_grid(painter: &egui::Painter, rect: egui::Rect, _ui: &egui::Ui) {
+/// * `state` - Application state for world bounds
+fn draw_grid(painter: &egui::Painter, rect: egui::Rect, state: &AppState) {
     let grid_color = Color32::from_rgb(0, 0, 100);
     let grid_stroke = egui::Stroke::new(1.0, grid_color);
-    for i in 0..=10 {
-        let t = i as f32 / 10.0; // 0.0 ..= 1.0 in 0.1 steps
-        // Vertical line at x = i * 1000
-        let x = egui::lerp(rect.left()..=rect.right(), t);
-        painter.line_segment([egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())], grid_stroke);
-        // Horizontal line at y = i * 1000
-        let y = egui::lerp(rect.top()..=rect.bottom(), t);
-        painter.line_segment([egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)], grid_stroke);
+
+    let world_min_x = state.world_top_left.x;
+    let world_max_x = state.world_bottom_right.x;
+    let world_min_y = state.world_top_left.y;
+    let world_max_y = state.world_bottom_right.y;
+    let world_width = world_max_x - world_min_x;
+    let world_height = world_max_y - world_min_y;
+
+    // Draw grid lines every 1000 units
+    let grid_spacing = 1000.0;
+
+    // Vertical lines
+    let start_x = ((world_min_x / grid_spacing).ceil() * grid_spacing) as u32;
+    let end_x = world_max_x as u32;
+    let mut x = start_x;
+    while x <= end_x {
+        let t = (x as f64 - world_min_x) / world_width;
+        let screen_x = egui::lerp(rect.left()..=rect.right(), t as f32);
+        painter.line_segment([egui::pos2(screen_x, rect.top()), egui::pos2(screen_x, rect.bottom())], grid_stroke);
+        x += grid_spacing as u32;
+    }
+
+    // Horizontal lines
+    let start_y = ((world_min_y / grid_spacing).ceil() * grid_spacing) as u32;
+    let end_y = world_max_y as u32;
+    let mut y = start_y;
+    while y <= end_y {
+        let t = (y as f64 - world_min_y) / world_height;
+        let screen_y = egui::lerp(rect.top()..=rect.bottom(), t as f32);
+        painter.line_segment([egui::pos2(rect.left(), screen_y), egui::pos2(rect.right(), screen_y)], grid_stroke);
+        y += grid_spacing as u32;
     }
 }
 
@@ -112,12 +158,19 @@ fn draw_grid(painter: &egui::Painter, rect: egui::Rect, _ui: &egui::Ui) {
 ///
 /// * `painter` - egui painter for drawing
 /// * `rect` - The screen-space map rectangle
-/// * `obstacles` - List of obstacles to render
-fn draw_obstacles(painter: &egui::Painter, rect: egui::Rect, obstacles: &[Obstacle]) {
+/// * `state` - Application state for world bounds and obstacles
+fn draw_obstacles(painter: &egui::Painter, rect: egui::Rect, state: &AppState) {
     let obstacle_fill = Color32::from_rgba_unmultiplied(255, 255, 255, 255);
     let obstacle_stroke = egui::Stroke::new(1.5, Color32::from_rgb(255, 255, 255));
-    
-    for obs in obstacles {
+
+    let world_min_x = state.world_top_left.x;
+    let world_max_x = state.world_bottom_right.x;
+    let world_min_y = state.world_top_left.y;
+    let world_max_y = state.world_bottom_right.y;
+    let world_width = world_max_x - world_min_x;
+    let world_height = world_max_y - world_min_y;
+
+    for obs in &state.obstacles {
         match obs {
             Obstacle::Rectangle { position, .. } => {
                 // Compute bounds from corners in world units
@@ -126,22 +179,22 @@ fn draw_obstacles(painter: &egui::Painter, rect: egui::Rect, obstacles: &[Obstac
                 let t = position.top_left.y.min(position.bottom_right.y);
                 let b = position.top_left.y.max(position.bottom_right.y);
 
-                // Map world 0..10000 to rect coordinates
-                let left = egui::lerp(rect.left()..=rect.right(), l as f32 / 10000.0);
-                let right = egui::lerp(rect.left()..=rect.right(), r as f32 / 10000.0);
-                let top = egui::lerp(rect.top()..=rect.bottom(), t as f32 / 10000.0);
-                let bottom = egui::lerp(rect.top()..=rect.bottom(), b as f32 / 10000.0);
+                // Map world coordinates to rect coordinates
+                let left = egui::lerp(rect.left()..=rect.right(), ((l - world_min_x) / world_width) as f32);
+                let right = egui::lerp(rect.left()..=rect.right(), ((r - world_min_x) / world_width) as f32);
+                let top = egui::lerp(rect.top()..=rect.bottom(), ((t - world_min_y) / world_height) as f32);
+                let bottom = egui::lerp(rect.top()..=rect.bottom(), ((b - world_min_y) / world_height) as f32);
                 let rect_px = egui::Rect::from_min_max(egui::pos2(left.min(right), top.min(bottom)), egui::pos2(left.max(right), top.max(bottom)));
                 painter.rect_filled(rect_px, 0.0, obstacle_fill);
                 painter.rect_stroke(rect_px, 0.0, obstacle_stroke);
             }
             Obstacle::Circle { position, .. } => {
-                let cx = egui::lerp(rect.left()..=rect.right(), position.center.x as f32 / 10000.0);
-                let cy = egui::lerp(rect.top()..=rect.bottom(), position.center.y as f32 / 10000.0);
-                // Uniform scale for radius: take min scale to keep circle round in non-square rects
-                let scale_x = rect.width() / 10000.0;
-                let scale_y = rect.height() / 10000.0;
-                let units_to_pixels = scale_x.min(scale_y);
+                let cx = egui::lerp(rect.left()..=rect.right(), ((position.center.x - world_min_x) / world_width) as f32);
+                let cy = egui::lerp(rect.top()..=rect.bottom(), ((position.center.y - world_min_y) / world_height) as f32);
+                // Scale radius - use width for X scale and height for Y scale, then average for uniform circle
+                let scale_x = rect.width() / world_width as f32;
+                let scale_y = rect.height() / world_height as f32;
+                let units_to_pixels = (scale_x + scale_y) / 2.0;
                 let r = position.radius as f32 * units_to_pixels;
                 let center_px = egui::pos2(cx, cy);
                 painter.circle_filled(center_px, r, obstacle_fill);
@@ -165,23 +218,31 @@ fn draw_obstacles(painter: &egui::Painter, rect: egui::Rect, obstacles: &[Obstac
 /// * `ui` - UI context for text rendering
 fn draw_nodes(painter: &egui::Painter, rect: egui::Rect, state: &mut AppState, ui: &egui::Ui) {
     let radius = 4.0;
-    
+
+    let world_min_x = state.world_top_left.x;
+    let world_max_x = state.world_bottom_right.x;
+    let world_min_y = state.world_top_left.y;
+    let world_max_y = state.world_bottom_right.y;
+    let world_width = world_max_x - world_min_x;
+    let world_height = world_max_y - world_min_y;
+
     // Collect expired indicators first to avoid borrowing issues
-    let expired_indicators: Vec<u32> = state.node_radio_transfer_indicators
+    let expired_indicators: Vec<u32> = state
+        .node_radio_transfer_indicators
         .iter()
         .filter(|(_, (expiry, _, _))| *expiry <= std::time::Instant::now())
         .map(|(id, _)| *id)
         .collect();
-    
+
     // Remove expired indicators
     for id in expired_indicators {
         state.node_radio_transfer_indicators.remove(&id);
     }
-    
+
     for p in state.nodes.iter() {
         let pos = egui::pos2(
-            egui::lerp(rect.left()..=rect.right(), p.position.x as f32 / 10000f32),
-            egui::lerp(rect.top()..=rect.bottom(), p.position.y as f32 / 10000f32),
+            egui::lerp(rect.left()..=rect.right(), ((p.position.x - world_min_x) / world_width) as f32),
+            egui::lerp(rect.top()..=rect.bottom(), ((p.position.y - world_min_y) / world_height) as f32),
         );
 
         let mut color = ui.visuals().widgets.inactive.fg_stroke.color;
@@ -191,7 +252,7 @@ fn draw_nodes(painter: &egui::Painter, rect: egui::Rect, state: &mut AppState, u
         }
 
         painter.circle_filled(pos, radius, color);
-        
+
         // Optional ID label next to each node
         if state.show_node_ids {
             let label_pos = egui::pos2(pos.x + 6.0, pos.y - 6.0);
@@ -227,10 +288,12 @@ fn draw_radio_indicator(painter: &egui::Painter, rect: egui::Rect, state: &AppSt
         let remaining = *expiry - std::time::Instant::now();
         if remaining > Duration::from_millis(0) {
             let alpha = (remaining.as_millis() as f32 / NODE_RADIO_TRANSFER_INDICATOR_TIMEOUT as f32).clamp(0.0, 1.0);
-            // Convert world distance to pixels like we do for coordinates (range 0..10000)
-            let scale_x = rect.width() / 10000.0;
-            let scale_y = rect.height() / 10000.0;
-            let units_to_pixels = scale_x.min(scale_y);
+            // Convert world distance to pixels using world dimensions
+            let world_width = state.world_bottom_right.x - state.world_top_left.x;
+            let world_height = state.world_bottom_right.y - state.world_top_left.y;
+            let scale_x = rect.width() / world_width as f32;
+            let scale_y = rect.height() / world_height as f32;
+            let units_to_pixels = (scale_x + scale_y) / 2.0;
             let radius = (*distance as f32 * units_to_pixels) * (1.0 - alpha);
             let color = color_for_message_type(*message_type, alpha);
             painter.circle_stroke(*pos, radius, egui::Stroke::new(1.0, color));
@@ -248,15 +311,22 @@ fn draw_radio_indicator(painter: &egui::Painter, rect: egui::Rect, state: &AppSt
 /// * `painter` - egui painter
 /// * `rect` - Screen-space map rectangle
 /// * `selected_node` - The currently selected node
-fn draw_radio_range(painter: &egui::Painter, rect: egui::Rect, selected_node: &crate::ui::NodeUIState) {
+fn draw_radio_range(painter: &egui::Painter, rect: egui::Rect, selected_node: &crate::ui::NodeUIState, state: &AppState) {
+    let world_min_x = state.world_top_left.x;
+    let world_max_x = state.world_bottom_right.x;
+    let world_min_y = state.world_top_left.y;
+    let world_max_y = state.world_bottom_right.y;
+    let world_width = world_max_x - world_min_x;
+    let world_height = world_max_y - world_min_y;
+
     let pos = egui::pos2(
-        egui::lerp(rect.left()..=rect.right(), selected_node.position.x as f32 / 10000f32),
-        egui::lerp(rect.top()..=rect.bottom(), selected_node.position.y as f32 / 10000f32),
+        egui::lerp(rect.left()..=rect.right(), ((selected_node.position.x - world_min_x) / world_width) as f32),
+        egui::lerp(rect.top()..=rect.bottom(), ((selected_node.position.y - world_min_y) / world_height) as f32),
     );
 
-    let scale_x = rect.width() / 10000.0;
-    let scale_y = rect.height() / 10000.0;
-    let units_to_pixels = scale_x.min(scale_y);
+    let scale_x = rect.width() / world_width as f32;
+    let scale_y = rect.height() / world_height as f32;
+    let units_to_pixels = (scale_x + scale_y) / 2.0;
     let radius = selected_node.radio_strength as f32 * units_to_pixels;
     painter.circle_filled(pos, radius, Color32::from_rgba_unmultiplied(0, 128, 255, 50));
 }
@@ -275,11 +345,18 @@ fn draw_radio_range(painter: &egui::Painter, rect: egui::Rect, selected_node: &c
 fn handle_node_selection(response: &egui::Response, rect: egui::Rect, state: &mut AppState) {
     if response.clicked() {
         if let Some(click_pos) = response.interact_pointer_pos() {
+            let world_min_x = state.world_top_left.x;
+            let world_max_x = state.world_bottom_right.x;
+            let world_min_y = state.world_top_left.y;
+            let world_max_y = state.world_bottom_right.y;
+            let world_width = world_max_x - world_min_x;
+            let world_height = world_max_y - world_min_y;
+
             let mut best: Option<(usize, f32)> = None;
             for (i, p) in state.nodes.iter().enumerate() {
                 let pos = egui::pos2(
-                    egui::lerp(rect.left()..=rect.right(), p.position.x as f32 / 10000f32),
-                    egui::lerp(rect.top()..=rect.bottom(), p.position.y as f32 / 10000f32),
+                    egui::lerp(rect.left()..=rect.right(), ((p.position.x - world_min_x) / world_width) as f32),
+                    egui::lerp(rect.top()..=rect.bottom(), ((p.position.y - world_min_y) / world_height) as f32),
                 );
                 let d2 = pos.distance_sq(click_pos);
                 if best.map_or(true, |(_, bd)| d2 < bd) {
