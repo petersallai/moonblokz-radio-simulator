@@ -274,7 +274,7 @@ fn draw_nodes(painter: &egui::Painter, rect: egui::Rect, state: &mut AppState, u
             egui::lerp(rect.top()..=rect.bottom(), ((p.position.y - world_min_y) / world_height) as f32),
         );
 
-        let mut color = ui.visuals().widgets.inactive.fg_stroke.color;
+        let mut color = Color32::from_rgb(40, 200, 255);
 
         if state.measurement_identifier != 0 && state.reached_nodes.contains(&p.node_id) {
             color = Color32::from_rgb(0, 255, 0); // Green if reached in current measurement

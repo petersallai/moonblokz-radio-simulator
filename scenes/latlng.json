@@ -1,8 +1,8 @@
 {
   "path_loss_parameters": {
-    "path_loss_exponent": 2.8,
-    "shadowing_sigma": 2.0,
-    "path_loss_at_reference_distance": 38.0,
+    "path_loss_exponent": 3.5,
+    "shadowing_sigma": 6.0,
+    "path_loss_at_reference_distance": 32.0,
     "noise_floor": -117.0
   },
   "lora_parameters": {
@@ -25,11 +25,11 @@
     "tx_maximum_random_delay": 200
   },
   "nodes": [
-    {"node_id": 1, "position": {"y": 47.40411, "x": 18.94574}, "radio_strength": 2}
+    {"node_id": 1, "position": {"y": 47.39910309690799, "x": 18.944571384188297}, "radio_strength": 20}
   ],
   "obstacles": [],
-  "world_top_left": { "y": 47.420986466808756, "x": 18.91531635067557 },
-  "world_bottom_right": { "y": 47.39112999411594, "x": 18.967046194277355 },
+  "world_top_left": { "y": 47.420777920359676, "x": 18.91532117376626 },
+  "world_bottom_right": { "y": 47.3909453611854, "x": 18.96701416893434 },
   "width": 3800,
   "height": 3400,
   "background_image": "background.png"
