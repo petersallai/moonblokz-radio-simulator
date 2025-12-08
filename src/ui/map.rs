@@ -290,7 +290,7 @@ fn draw_nodes(painter: &egui::Painter, rect: egui::Rect, state: &mut AppState, u
                 egui::Align2::LEFT_BOTTOM,
                 format!("#{}", p.node_id),
                 egui::FontId::monospace(12.0),
-                ui.visuals().text_color(),
+                Color32::from_rgb(40, 200, 255),
             );
         }
 
