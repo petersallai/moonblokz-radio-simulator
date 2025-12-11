@@ -92,9 +92,17 @@ pub struct AppState {
     /// Whether a scene file has been selected (after mode selection).
     pub scene_file_selected: bool,
 
-    // Persistence
-    /// Last directory used for file picker (persisted across sessions).
-    pub last_open_dir: Option<String>,
+    // Persistence - separate last directories for each file picker
+    /// Last directory used for simulation scene file picker.
+    pub last_open_dir_sim_scene: Option<String>,
+    /// Last directory used for real-time tracking scene file picker.
+    pub last_open_dir_rt_scene: Option<String>,
+    /// Last directory used for real-time tracking log file picker.
+    pub last_open_dir_rt_log: Option<String>,
+    /// Last directory used for log visualization scene file picker.
+    pub last_open_dir_logvis_scene: Option<String>,
+    /// Last directory used for log visualization log file picker.
+    pub last_open_dir_logvis_log: Option<String>,
 
     // Statistics
     /// Count of echo result messages observed.
@@ -159,7 +167,11 @@ pub struct AppState {
 /// improving UX by remembering the user's working directory.
 #[derive(Default, Serialize, Deserialize)]
 struct PersistedSettings {
-    last_open_dir: Option<String>,
+    last_open_dir_sim_scene: Option<String>,
+    last_open_dir_rt_scene: Option<String>,
+    last_open_dir_rt_log: Option<String>,
+    last_open_dir_logvis_scene: Option<String>,
+    last_open_dir_logvis_log: Option<String>,
 }
 
 impl AppState {
@@ -199,7 +211,11 @@ impl AppState {
             reached_nodes: HashSet::new(),
             measurement_start_time: embassy_time::Instant::now(),
             scene_file_selected: false,
-            last_open_dir: persisted.last_open_dir,
+            last_open_dir_sim_scene: persisted.last_open_dir_sim_scene,
+            last_open_dir_rt_scene: persisted.last_open_dir_rt_scene,
+            last_open_dir_rt_log: persisted.last_open_dir_rt_log,
+            last_open_dir_logvis_scene: persisted.last_open_dir_logvis_scene,
+            last_open_dir_logvis_log: persisted.last_open_dir_logvis_log,
             echo_result_count: 0,
             speed_percent: crate::time_driver::get_simulation_speed_percent(),
             auto_speed_enabled: false,
@@ -269,7 +285,7 @@ impl AppState {
     /// If the user cancels the picker, returns to the mode selection screen.
     pub fn open_file_selector(&mut self) {
         let mut dialog = rfd::FileDialog::new().add_filter("text", &["json"]);
-        if let Some(dir) = &self.last_open_dir {
+        if let Some(dir) = &self.last_open_dir_sim_scene {
             dialog = dialog.set_directory(dir);
         }
         let files = dialog.pick_file();
@@ -283,7 +299,7 @@ impl AppState {
             self.scene_file_selected = true;
             // Remember directory for next time
             if let Some(parent) = file.parent() {
-                self.last_open_dir = Some(parent.to_string_lossy().to_string());
+                self.last_open_dir_sim_scene = Some(parent.to_string_lossy().to_string());
             }
         } else {
             // User cancelled the picker; return to mode selection screen
@@ -292,30 +308,58 @@ impl AppState {
         }
     }
 
-    /// Open a file picker for selecting a scene JSON file.
+    /// Open a file picker for selecting a scene JSON file for real-time tracking.
     /// Returns the selected path or None if cancelled.
-    pub fn open_scene_file_picker(&mut self) -> Option<String> {
+    pub fn open_rt_scene_file_picker(&mut self) -> Option<String> {
         let mut dialog = rfd::FileDialog::new().add_filter("Scene files", &["json"]);
-        if let Some(dir) = &self.last_open_dir {
+        if let Some(dir) = &self.last_open_dir_rt_scene {
             dialog = dialog.set_directory(dir);
         }
         let file = dialog.pick_file()?;
         if let Some(parent) = file.parent() {
-            self.last_open_dir = Some(parent.to_string_lossy().to_string());
+            self.last_open_dir_rt_scene = Some(parent.to_string_lossy().to_string());
         }
         Some(file.to_string_lossy().to_string())
     }
 
-    /// Open a file picker for selecting a log file.
+    /// Open a file picker for selecting a log file for real-time tracking.
     /// Returns the selected path or None if cancelled.
-    pub fn open_log_file_picker(&mut self) -> Option<String> {
+    pub fn open_rt_log_file_picker(&mut self) -> Option<String> {
         let mut dialog = rfd::FileDialog::new().add_filter("Log files", &["log", "txt", "*"]);
-        if let Some(dir) = &self.last_open_dir {
+        if let Some(dir) = &self.last_open_dir_rt_log {
             dialog = dialog.set_directory(dir);
         }
         let file = dialog.pick_file()?;
         if let Some(parent) = file.parent() {
-            self.last_open_dir = Some(parent.to_string_lossy().to_string());
+            self.last_open_dir_rt_log = Some(parent.to_string_lossy().to_string());
+        }
+        Some(file.to_string_lossy().to_string())
+    }
+
+    /// Open a file picker for selecting a scene JSON file for log visualization.
+    /// Returns the selected path or None if cancelled.
+    pub fn open_logvis_scene_file_picker(&mut self) -> Option<String> {
+        let mut dialog = rfd::FileDialog::new().add_filter("Scene files", &["json"]);
+        if let Some(dir) = &self.last_open_dir_logvis_scene {
+            dialog = dialog.set_directory(dir);
+        }
+        let file = dialog.pick_file()?;
+        if let Some(parent) = file.parent() {
+            self.last_open_dir_logvis_scene = Some(parent.to_string_lossy().to_string());
+        }
+        Some(file.to_string_lossy().to_string())
+    }
+
+    /// Open a file picker for selecting a log file for log visualization.
+    /// Returns the selected path or None if cancelled.
+    pub fn open_logvis_log_file_picker(&mut self) -> Option<String> {
+        let mut dialog = rfd::FileDialog::new().add_filter("Log files", &["log", "txt", "*"]);
+        if let Some(dir) = &self.last_open_dir_logvis_log {
+            dialog = dialog.set_directory(dir);
+        }
+        let file = dialog.pick_file()?;
+        if let Some(parent) = file.parent() {
+            self.last_open_dir_logvis_log = Some(parent.to_string_lossy().to_string());
         }
         Some(file.to_string_lossy().to_string())
     }
@@ -348,6 +392,59 @@ impl AppState {
                 log_path: Some(log),
             });
         }
+    }
+
+    /// Reset the application to the mode selector screen.
+    ///
+    /// This clears the current mode state and returns to the initial mode selection
+    /// interface. Used when the user wants to switch between operating modes.
+    pub fn reset_to_mode_selector(&mut self) {
+        // Reset mode selection state
+        self.mode_selected = false;
+        self.scene_file_selected = false;
+
+        // Clear mode selector file paths
+        self.mode_selector.realtime_scene_path = None;
+        self.mode_selector.realtime_log_path = None;
+        self.mode_selector.logvis_scene_path = None;
+        self.mode_selector.logvis_log_path = None;
+
+        // Clear simulation state
+        self.selected = None;
+        self.nodes.clear();
+        self.obstacles.clear();
+        self.node_radio_transfer_indicators.clear();
+        self.node_info = None;
+
+        // Reset metrics
+        self.total_sent_packets = 0;
+        self.total_received_packets = 0;
+        self.total_collision = 0;
+        self.simulation_delay = 0;
+        self.measurement_identifier = 0;
+        self.reached_nodes.clear();
+        self.echo_result_count = 0;
+
+        // Reset measurement milestones
+        self.measurement_50_time = 0;
+        self.measurement_90_time = 0;
+        self.measurement_100_time = 0;
+        self.measurement_50_message_count = 0;
+        self.measurement_90_message_count = 0;
+        self.measurement_100_message_count = 0;
+        self.measurement_total_time = 0;
+        self.measurement_total_message_count = 0;
+
+        // Reset analyzer state
+        self.analyzer_delay = 0;
+        self.visualization_ended = false;
+
+        // Clear background image
+        self.background_image = None;
+        self.background_image_texture = None;
+
+        // Reset operating mode to default
+        self.operating_mode = OperatingMode::Simulation;
     }
 }
 
@@ -395,7 +492,11 @@ pub fn color_for_message_type(message_type: u8, alpha: f32) -> Color32 {
 impl eframe::App for AppState {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         let settings = PersistedSettings {
-            last_open_dir: self.last_open_dir.clone(),
+            last_open_dir_sim_scene: self.last_open_dir_sim_scene.clone(),
+            last_open_dir_rt_scene: self.last_open_dir_rt_scene.clone(),
+            last_open_dir_rt_log: self.last_open_dir_rt_log.clone(),
+            last_open_dir_logvis_scene: self.last_open_dir_logvis_scene.clone(),
+            last_open_dir_logvis_log: self.last_open_dir_logvis_log.clone(),
         };
         eframe::set_value(storage, "app_settings", &settings);
     }
@@ -412,14 +513,14 @@ impl eframe::App for AppState {
                     }
                     mode_selector::ModeSelection::RealtimeSelectScene => {
                         // Open scene file picker for real-time mode
-                        if let Some(path) = self.open_scene_file_picker() {
+                        if let Some(path) = self.open_rt_scene_file_picker() {
                             self.mode_selector.realtime_scene_path = Some(path);
                             self.check_realtime_ready();
                         }
                     }
                     mode_selector::ModeSelection::RealtimeSelectLog => {
                         // Open log file picker for real-time mode
-                        if let Some(path) = self.open_log_file_picker() {
+                        if let Some(path) = self.open_rt_log_file_picker() {
                             self.mode_selector.realtime_log_path = Some(path);
                             self.check_realtime_ready();
                         }
@@ -436,14 +537,14 @@ impl eframe::App for AppState {
                     }
                     mode_selector::ModeSelection::LogVisSelectScene => {
                         // Open scene file picker for log visualization mode
-                        if let Some(path) = self.open_scene_file_picker() {
+                        if let Some(path) = self.open_logvis_scene_file_picker() {
                             self.mode_selector.logvis_scene_path = Some(path);
                             self.check_logvis_ready();
                         }
                     }
                     mode_selector::ModeSelection::LogVisSelectLog => {
                         // Open log file picker for log visualization mode
-                        if let Some(path) = self.open_log_file_picker() {
+                        if let Some(path) = self.open_logvis_log_file_picker() {
                             self.mode_selector.logvis_log_path = Some(path);
                             self.check_logvis_ready();
                         }
