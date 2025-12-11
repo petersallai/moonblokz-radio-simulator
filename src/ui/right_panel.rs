@@ -23,7 +23,7 @@
 //! - Yellow: Medium quality
 //! - Green: Excellent quality (≥ excellent_limit)
 
-use crate::ui::{AppState, UICommand, color_for_message_type};
+use crate::ui::{AppState, OperatingMode, UICommand, color_for_message_type};
 use eframe::egui;
 use egui::Color32;
 use std::cmp::max;
@@ -99,46 +99,50 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
             let avail_w = ui.available_width();
             let button_h = ui.spacing().interact_size.y;
             let node_id = p.node_id; // Capture node_id before moving into closure
+            let show_measurement_button = state.operating_mode != OperatingMode::LogVisualization;
             ui.allocate_ui_with_layout(egui::vec2(avail_w, ui.available_height()), egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
                 // Bottom buttons, centered at 80% width
+                // Hide measurement button in log visualization mode
                 if let Some(_i) = state.selected {
-                    let button_w = (avail_w * 0.8).max(0.0);
+                    if show_measurement_button {
+                        let button_w = (avail_w * 0.8).max(0.0);
 
-                    // 20px padding at the very bottom under the last (bottom-most) button
-                    ui.add_space(20.0);
+                        // 20px padding at the very bottom under the last (bottom-most) button
+                        ui.add_space(20.0);
 
-                    ui.horizontal(|ui| {
-                        let pad = (avail_w - button_w).max(0.0) / 2.0;
-                        ui.add_space(pad);
-                        let measurement_button_title: String = if state.measurement_identifier > 0 {
-                            "Reset Measurement".into()
-                        } else {
-                            "Start Measurement".into()
-                        };
-                        if ui.add_sized([button_w, button_h], egui::Button::new(measurement_button_title)).clicked() {
-                            if state.measurement_identifier == 0 {
-                                state.measurement_identifier = max(rand::random::<u32>(), 1);
-                                state.measurement_start_time = embassy_time::Instant::now();
-                                let _ = state.ui_command_tx.try_send(UICommand::StartMeasurement(node_id, state.measurement_identifier));
-                                state.reached_nodes.clear();
-                                state.reached_nodes.insert(node_id);
+                        ui.horizontal(|ui| {
+                            let pad = (avail_w - button_w).max(0.0) / 2.0;
+                            ui.add_space(pad);
+                            let measurement_button_title: String = if state.measurement_identifier > 0 {
+                                "Reset Measurement".into()
                             } else {
-                                state.reached_nodes.clear();
-                                state.measurement_identifier = 0;
-                                state.measurement_50_time = 0;
-                                state.measurement_90_time = 0;
-                                state.measurement_100_time = 0;
-                                state.measurement_total_time = 0;
-                                state.measurement_total_message_count = 0;
-                                state.measurement_50_message_count = 0;
-                                state.measurement_90_message_count = 0;
-                                state.measurement_100_message_count = 0;
+                                "Start Measurement".into()
+                            };
+                            if ui.add_sized([button_w, button_h], egui::Button::new(measurement_button_title)).clicked() {
+                                if state.measurement_identifier == 0 {
+                                    state.measurement_identifier = max(rand::random::<u32>(), 1);
+                                    state.measurement_start_time = embassy_time::Instant::now();
+                                    let _ = state.ui_command_tx.try_send(UICommand::StartMeasurement(node_id, state.measurement_identifier));
+                                    state.reached_nodes.clear();
+                                    state.reached_nodes.insert(node_id);
+                                } else {
+                                    state.reached_nodes.clear();
+                                    state.measurement_identifier = 0;
+                                    state.measurement_50_time = 0;
+                                    state.measurement_90_time = 0;
+                                    state.measurement_100_time = 0;
+                                    state.measurement_total_time = 0;
+                                    state.measurement_total_message_count = 0;
+                                    state.measurement_50_message_count = 0;
+                                    state.measurement_90_message_count = 0;
+                                    state.measurement_100_message_count = 0;
+                                }
                             }
-                        }
-                    });
+                        });
 
-                    // 5px spacing above the button, separating it from the table
-                    ui.add_space(5.0);
+                        // 5px spacing above the button, separating it from the table
+                        ui.add_space(5.0);
+                    }
                 }
 
                 // Table area above buttons: fill whatever is left

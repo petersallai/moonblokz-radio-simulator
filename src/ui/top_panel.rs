@@ -9,7 +9,7 @@
 //! real-time feedback on simulation performance and network behavior.
 
 use eframe::egui;
-use crate::ui::{AppState, UICommand};
+use crate::ui::{AppState, OperatingMode, UICommand};
 
 /// Render the top panel with metrics and controls.
 ///
@@ -235,6 +235,11 @@ fn render_measured_data(ui: &mut egui::Ui, state: &mut AppState) {
 /// - Show node IDs checkbox: Toggle node ID labels on the map
 /// - Delay warning: Display if simulation is running behind schedule
 ///
+/// Controls adapt based on operating mode:
+/// - Simulation: Full controls with auto-speed
+/// - Real-time Tracking: Hide speed controls, show delay indicator
+/// - Log Visualization: Show speed slider but hide auto-speed
+///
 /// # Parameters
 ///
 /// * `ui` - egui UI context
@@ -242,34 +247,82 @@ fn render_measured_data(ui: &mut egui::Ui, state: &mut AppState) {
 fn render_controls(ui: &mut egui::Ui, state: &mut AppState) {
     ui.heading("Controls");
     ui.separator();
-    ui.horizontal(|ui| {
-        ui.label("Speed:");
-        let mut speed = state.speed_percent as f64;
-        // Keep UI slider in sync with autoscaler bounds
-        if ui.add(egui::Slider::new(&mut speed, 20.0..=1000.0).suffix("%")).changed() {
-            state.speed_percent = speed.round() as u32;
-            crate::time_driver::set_simulation_speed_percent(state.speed_percent);
+
+    match state.operating_mode {
+        OperatingMode::Simulation => {
+            // Full controls for simulation mode
+            ui.horizontal(|ui| {
+                ui.label("Speed:");
+                let mut speed = state.speed_percent as f64;
+                if ui.add(egui::Slider::new(&mut speed, 20.0..=1000.0).suffix("%")).changed() {
+                    state.speed_percent = speed.round() as u32;
+                    crate::time_driver::set_simulation_speed_percent(state.speed_percent);
+                }
+            });
+            ui.horizontal(|ui| {
+                let mut auto = state.auto_speed_enabled;
+                if ui.checkbox(&mut auto, "Auto speed").changed() {
+                    state.auto_speed_enabled = auto;
+                    let _ = state.ui_command_tx.try_send(UICommand::SetAutoSpeed(state.auto_speed_enabled));
+                }
+                if ui.button("Reset").clicked() {
+                    state.speed_percent = 100;
+                    crate::time_driver::set_simulation_speed_percent(state.speed_percent);
+                }
+            });
         }
-    });
-    ui.horizontal(|ui| {
-        let mut auto = state.auto_speed_enabled;
-        if ui.checkbox(&mut auto, "Auto speed").changed() {
-            state.auto_speed_enabled = auto;
-            let _ = state.ui_command_tx.try_send(UICommand::SetAutoSpeed(state.auto_speed_enabled));
+        OperatingMode::RealtimeTracking => {
+            // Real-time mode: show delay indicator instead of speed controls
+            ui.horizontal(|ui| {
+                ui.label("Mode: Real-time Tracking");
+            });
+            ui.horizontal(|ui| {
+                ui.label("Delay:");
+                let delay_color = if state.analyzer_delay > 1000 {
+                    egui::Color32::RED
+                } else if state.analyzer_delay > 500 {
+                    egui::Color32::YELLOW
+                } else {
+                    egui::Color32::GREEN
+                };
+                ui.colored_label(delay_color, format!("{} ms", state.analyzer_delay));
+            });
         }
-        if ui.button("Reset").clicked() {
-            state.speed_percent = 100;
-            crate::time_driver::set_simulation_speed_percent(state.speed_percent);
+        OperatingMode::LogVisualization => {
+            // Log visualization: speed controls but no auto-speed
+            ui.horizontal(|ui| {
+                ui.label("Speed:");
+                let mut speed = state.speed_percent as f64;
+                if ui.add(egui::Slider::new(&mut speed, 20.0..=1000.0).suffix("%")).changed() {
+                    state.speed_percent = speed.round() as u32;
+                    crate::time_driver::set_simulation_speed_percent(state.speed_percent);
+                }
+            });
+            ui.horizontal(|ui| {
+                if ui.button("Reset").clicked() {
+                    state.speed_percent = 100;
+                    crate::time_driver::set_simulation_speed_percent(state.speed_percent);
+                }
+            });
         }
-    });
+    }
+
     ui.separator();
     let mut show_ids = state.show_node_ids;
     if ui.checkbox(&mut show_ids, "Show node IDs").changed() {
         state.show_node_ids = show_ids;
     }
-    if state.simulation_delay > 10 {
+
+    // Show delay warning for simulation mode
+    if state.operating_mode == OperatingMode::Simulation && state.simulation_delay > 10 {
         ui.separator();
         let warn_text = format!("Warning! Simulation delay is more than 10 milliseconds ({} ms)", state.simulation_delay);
-        ui.add(egui::Label::new(egui::RichText::new(warn_text).color(egui::Color32::RED)).wrap(true));
+        ui.label(egui::RichText::new(warn_text).color(egui::Color32::RED));
+    }
+
+    // Show visualization ended indicator
+    if state.visualization_ended {
+        ui.separator();
+        ui.label(egui::RichText::new("✓ Log visualization complete").color(egui::Color32::GREEN));
     }
 }

@@ -27,7 +27,7 @@ use std::collections::HashSet;
 use std::time::Duration;
 use std::time::Instant;
 
-use super::{NodeInfo, NodeUIState, UICommand, UIRefreshState, mode_selector};
+use super::{NodeInfo, NodeUIState, OperatingMode, UICommand, UIRefreshState, mode_selector};
 use crate::simulation::Obstacle;
 use crate::simulation::Point;
 
@@ -145,6 +145,12 @@ pub struct AppState {
     pub background_image: Option<String>,
     /// Loaded background image texture for rendering.
     pub background_image_texture: Option<egui::TextureHandle>,
+    /// Current operating mode (Simulation, RealtimeTracking, or LogVisualization).
+    pub operating_mode: OperatingMode,
+    /// Delay between real clock and last processed log timestamp (milliseconds).
+    pub analyzer_delay: u64,
+    /// Whether log visualization has reached end of file.
+    pub visualization_ended: bool,
 }
 
 /// Settings persisted across application sessions.
@@ -214,6 +220,9 @@ impl AppState {
             height: 1.0,
             background_image: None,
             background_image_texture: None,
+            operating_mode: OperatingMode::Simulation,
+            analyzer_delay: 0,
+            visualization_ended: false,
         }
     }
 
@@ -254,8 +263,8 @@ impl AppState {
     /// Open a native file picker dialog for selecting a scene JSON file.
     ///
     /// This method displays a file picker filtered to JSON files, starting in the
-    /// last used directory if available. Upon selection, sends a LoadFile command
-    /// to the simulation and updates the last directory for next time.
+    /// last used directory if available. Upon selection, sends a StartMode command
+    /// to the dispatcher and updates the last directory for next time.
     ///
     /// If the user cancels the picker, returns to the mode selection screen.
     pub fn open_file_selector(&mut self) {
@@ -265,7 +274,12 @@ impl AppState {
         }
         let files = dialog.pick_file();
         if let Some(file) = files {
-            let _ = self.ui_command_tx.try_send(UICommand::LoadFile(file.to_str().unwrap().to_string()));
+            let scene_path = file.to_str().unwrap().to_string();
+            let _ = self.ui_command_tx.try_send(UICommand::StartMode {
+                mode: OperatingMode::Simulation,
+                scene_path,
+                log_path: None,
+            });
             self.scene_file_selected = true;
             // Remember directory for next time
             if let Some(parent) = file.parent() {
@@ -275,6 +289,64 @@ impl AppState {
             // User cancelled the picker; return to mode selection screen
             self.mode_selected = false;
             self.scene_file_selected = false;
+        }
+    }
+
+    /// Open a file picker for selecting a scene JSON file.
+    /// Returns the selected path or None if cancelled.
+    pub fn open_scene_file_picker(&mut self) -> Option<String> {
+        let mut dialog = rfd::FileDialog::new().add_filter("Scene files", &["json"]);
+        if let Some(dir) = &self.last_open_dir {
+            dialog = dialog.set_directory(dir);
+        }
+        let file = dialog.pick_file()?;
+        if let Some(parent) = file.parent() {
+            self.last_open_dir = Some(parent.to_string_lossy().to_string());
+        }
+        Some(file.to_string_lossy().to_string())
+    }
+
+    /// Open a file picker for selecting a log file.
+    /// Returns the selected path or None if cancelled.
+    pub fn open_log_file_picker(&mut self) -> Option<String> {
+        let mut dialog = rfd::FileDialog::new().add_filter("Log files", &["log", "txt", "*"]);
+        if let Some(dir) = &self.last_open_dir {
+            dialog = dialog.set_directory(dir);
+        }
+        let file = dialog.pick_file()?;
+        if let Some(parent) = file.parent() {
+            self.last_open_dir = Some(parent.to_string_lossy().to_string());
+        }
+        Some(file.to_string_lossy().to_string())
+    }
+
+    /// Check if real-time tracking mode is ready (both files selected).
+    /// If ready, triggers mode start.
+    pub fn check_realtime_ready(&mut self) {
+        if let (Some(scene), Some(log)) = (self.mode_selector.realtime_scene_path.clone(), self.mode_selector.realtime_log_path.clone()) {
+            self.mode_selected = true;
+            self.scene_file_selected = true;
+            self.operating_mode = OperatingMode::RealtimeTracking;
+            let _ = self.ui_command_tx.try_send(UICommand::StartMode {
+                mode: OperatingMode::RealtimeTracking,
+                scene_path: scene,
+                log_path: Some(log),
+            });
+        }
+    }
+
+    /// Check if log visualization mode is ready (both files selected).
+    /// If ready, triggers mode start.
+    pub fn check_logvis_ready(&mut self) {
+        if let (Some(scene), Some(log)) = (self.mode_selector.logvis_scene_path.clone(), self.mode_selector.logvis_log_path.clone()) {
+            self.mode_selected = true;
+            self.scene_file_selected = true;
+            self.operating_mode = OperatingMode::LogVisualization;
+            let _ = self.ui_command_tx.try_send(UICommand::StartMode {
+                mode: OperatingMode::LogVisualization,
+                scene_path: scene,
+                log_path: Some(log),
+            });
         }
     }
 }
@@ -331,10 +403,62 @@ impl eframe::App for AppState {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Show mode selector first if mode not yet selected
         if !self.mode_selected {
-            if let Some(_mode) = self.mode_selector.render(ctx) {
-                self.mode_selected = true;
-                // All modes currently open the file selector
-                self.open_file_selector();
+            if let Some(selection) = self.mode_selector.render(ctx) {
+                match selection {
+                    mode_selector::ModeSelection::Simulation => {
+                        self.mode_selected = true;
+                        self.operating_mode = OperatingMode::Simulation;
+                        self.open_file_selector();
+                    }
+                    mode_selector::ModeSelection::RealtimeSelectScene => {
+                        // Open scene file picker for real-time mode
+                        if let Some(path) = self.open_scene_file_picker() {
+                            self.mode_selector.realtime_scene_path = Some(path);
+                            self.check_realtime_ready();
+                        }
+                    }
+                    mode_selector::ModeSelection::RealtimeSelectLog => {
+                        // Open log file picker for real-time mode
+                        if let Some(path) = self.open_log_file_picker() {
+                            self.mode_selector.realtime_log_path = Some(path);
+                            self.check_realtime_ready();
+                        }
+                    }
+                    mode_selector::ModeSelection::RealtimeTracking { scene_path, log_path } => {
+                        self.mode_selected = true;
+                        self.scene_file_selected = true;
+                        self.operating_mode = OperatingMode::RealtimeTracking;
+                        let _ = self.ui_command_tx.try_send(UICommand::StartMode {
+                            mode: OperatingMode::RealtimeTracking,
+                            scene_path,
+                            log_path: Some(log_path),
+                        });
+                    }
+                    mode_selector::ModeSelection::LogVisSelectScene => {
+                        // Open scene file picker for log visualization mode
+                        if let Some(path) = self.open_scene_file_picker() {
+                            self.mode_selector.logvis_scene_path = Some(path);
+                            self.check_logvis_ready();
+                        }
+                    }
+                    mode_selector::ModeSelection::LogVisSelectLog => {
+                        // Open log file picker for log visualization mode
+                        if let Some(path) = self.open_log_file_picker() {
+                            self.mode_selector.logvis_log_path = Some(path);
+                            self.check_logvis_ready();
+                        }
+                    }
+                    mode_selector::ModeSelection::LogVisualization { scene_path, log_path } => {
+                        self.mode_selected = true;
+                        self.scene_file_selected = true;
+                        self.operating_mode = OperatingMode::LogVisualization;
+                        let _ = self.ui_command_tx.try_send(UICommand::StartMode {
+                            mode: OperatingMode::LogVisualization,
+                            scene_path,
+                            log_path: Some(log_path),
+                        });
+                    }
+                }
             }
             return;
         }
@@ -425,6 +549,15 @@ impl eframe::App for AppState {
                     } else {
                         self.background_image_texture = None;
                     }
+                }
+                UIRefreshState::AnalyzerDelay(delay_ms) => {
+                    self.analyzer_delay = delay_ms;
+                }
+                UIRefreshState::VisualizationEnded => {
+                    self.visualization_ended = true;
+                }
+                UIRefreshState::ModeChanged(mode) => {
+                    self.operating_mode = mode;
                 }
             }
         }

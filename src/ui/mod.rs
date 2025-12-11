@@ -33,6 +33,17 @@ use crate::simulation::{NodeMessage, Point};
 
 pub use app_state::{AppState, color_for_message_type};
 
+/// The three operational modes available in the application.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperatingMode {
+    /// Full simulation with physics modeling.
+    Simulation,
+    /// Real-time tracking of live log streams.
+    RealtimeTracking,
+    /// Playback of historical log files.
+    LogVisualization,
+}
+
 /// Detailed information about a selected node, including its complete message history.
 ///
 /// This struct is sent from the network task to the UI when a node is selected,
@@ -79,6 +90,12 @@ pub enum UIRefreshState {
     PoorAndExcellentLimits(u8, u8),
     SceneDimensionsUpdated(Point, Point, f64, f64),
     BackgroundImageUpdated(Option<String>),
+    /// Delay between real clock and last processed log timestamp (real-time tracking only).
+    AnalyzerDelay(u64),
+    /// Log visualization has reached end of file.
+    VisualizationEnded,
+    /// Current operating mode changed.
+    ModeChanged(OperatingMode),
 }
 
 /// UI-specific representation of a node's state.
@@ -100,6 +117,7 @@ pub struct NodeUIState {
 ///
 /// These messages flow through the `UICommandChannel` and are processed by
 /// the network task's main loop.
+#[derive(Debug)]
 pub enum UICommand {
     /// Load a scene configuration file at the given path.
     LoadFile(String),
@@ -109,4 +127,12 @@ pub enum UICommand {
     StartMeasurement(u32, u32),
     /// Enable or disable automatic speed adjustment.
     SetAutoSpeed(bool),
+    /// Start the application in a specific mode with file paths.
+    StartMode {
+        mode: OperatingMode,
+        scene_path: String,
+        log_path: Option<String>,
+    },
+    /// Seek to a specific time in log visualization (future enhancement).
+    SeekAnalyzer(u64),
 }

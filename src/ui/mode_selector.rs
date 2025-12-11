@@ -32,6 +32,14 @@ pub struct ModeSelector {
     simulation_icon: Option<Arc<egui::ColorImage>>,
     realtime_icon: Option<Arc<egui::ColorImage>>,
     log_icon: Option<Arc<egui::ColorImage>>,
+    /// Scene path for real-time tracking mode.
+    pub realtime_scene_path: Option<String>,
+    /// Log path for real-time tracking mode.
+    pub realtime_log_path: Option<String>,
+    /// Scene path for log visualization mode.
+    pub logvis_scene_path: Option<String>,
+    /// Log path for log visualization mode.
+    pub logvis_log_path: Option<String>,
 }
 
 impl ModeSelector {
@@ -49,6 +57,10 @@ impl ModeSelector {
             simulation_icon,
             realtime_icon,
             log_icon,
+            realtime_scene_path: None,
+            realtime_log_path: None,
+            logvis_scene_path: None,
+            logvis_log_path: None,
         }
     }
 
@@ -86,6 +98,7 @@ impl ModeSelector {
     let button_height = button_size.y;
     let bottom_padding = 30.0;
     let min_button_gap = 20.0;
+    let button_spacing = 10.0;
 
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.vertical_centered(|ui| {
@@ -150,18 +163,41 @@ impl ModeSelector {
                         ui.heading(egui::RichText::new("Real-time Tracking").size(22.0).color(Color32::WHITE));
                         ui.add_space(10.0);
                         ui.label(
-                            egui::RichText::new("To begin real-time network log visualization, first select the log file actively updated by the log_collector. Ensure a scene.json file containing node position definitions is present in the same directory.\n\nSee the documentation for file format definitions and examples.")
+                            egui::RichText::new("To begin real-time network log visualization, first select the scene file with node positions, then select the log file actively updated by the log_collector.\n\nSee the documentation for file format definitions and examples.")
                                 .size(16.0),
                         );
                         let used_height = ui.cursor().min.y - start_y;
-                        let remaining = PANEL_HEIGHT - used_height - button_height - bottom_padding;
+                        // Account for two buttons + spacing
+                        let remaining = PANEL_HEIGHT - used_height - (button_height * 2.0) - button_spacing - bottom_padding;
                         let gap = remaining.max(min_button_gap);
                         ui.add_space(gap);
-                        let button = egui::Button::new(egui::RichText::new("Connect to stream").size(15.0).color(Color32::WHITE))
+
+                        // First button: Select scene
+                        let scene_label = if self.realtime_scene_path.is_some() {
+                            "✅ Scene selected"
+                        } else {
+                            "Select scene"
+                        };
+                        let scene_button = egui::Button::new(egui::RichText::new(scene_label).size(15.0).color(Color32::WHITE))
                             .min_size(button_size);
-                        if ui.add(button).clicked() {
-                            selection = Some(ModeSelection::RealtimeTracking);
+                        if ui.add(scene_button).clicked() {
+                            selection = Some(ModeSelection::RealtimeSelectScene);
                         }
+
+                        ui.add_space(button_spacing);
+
+                        // Second button: Connect to stream
+                        let stream_label = if self.realtime_log_path.is_some() {
+                            "✅ Stream selected"
+                        } else {
+                            "Connect to stream"
+                        };
+                        let stream_button = egui::Button::new(egui::RichText::new(stream_label).size(15.0).color(Color32::WHITE))
+                            .min_size(button_size);
+                        if ui.add(stream_button).clicked() {
+                            selection = Some(ModeSelection::RealtimeSelectLog);
+                        }
+
                         ui.add_space(bottom_padding);
                     });
                 });
@@ -177,18 +213,41 @@ impl ModeSelector {
                         ui.heading(egui::RichText::new("Log Visualization").size(22.0).color(Color32::WHITE));
                         ui.add_space(10.0);
                         ui.label(
-                            egui::RichText::new("To view a saved network log, you must provide a log file that was previously created by the log_collector. This mode also requires a scene.json file, which defines the network node positions, to be present in the same directory.\n\nSee the documentation for file format definitions and examples.")
+                            egui::RichText::new("To view a saved network log, first select the scene file with node positions, then open the log file that was previously created by the log_collector.\n\nSee the documentation for file format definitions and examples.")
                                 .size(16.0),
                         );
                         let used_height = ui.cursor().min.y - start_y;
-                        let remaining = PANEL_HEIGHT - used_height - button_height - bottom_padding;
+                        // Account for two buttons + spacing
+                        let remaining = PANEL_HEIGHT - used_height - (button_height * 2.0) - button_spacing - bottom_padding;
                         let gap = remaining.max(min_button_gap);
                         ui.add_space(gap);
-                        let button = egui::Button::new(egui::RichText::new("Open log file").size(15.0).color(Color32::WHITE))
+
+                        // First button: Select scene
+                        let scene_label = if self.logvis_scene_path.is_some() {
+                            "✅ Scene selected"
+                        } else {
+                            "Select scene"
+                        };
+                        let scene_button = egui::Button::new(egui::RichText::new(scene_label).size(15.0).color(Color32::WHITE))
                             .min_size(button_size);
-                        if ui.add(button).clicked() {
-                            selection = Some(ModeSelection::LogVisualization);
+                        if ui.add(scene_button).clicked() {
+                            selection = Some(ModeSelection::LogVisSelectScene);
                         }
+
+                        ui.add_space(button_spacing);
+
+                        // Second button: Open log file
+                        let log_label = if self.logvis_log_path.is_some() {
+                            "✅ Log file selected"
+                        } else {
+                            "Open log file"
+                        };
+                        let log_button = egui::Button::new(egui::RichText::new(log_label).size(15.0).color(Color32::WHITE))
+                            .min_size(button_size);
+                        if ui.add(log_button).clicked() {
+                            selection = Some(ModeSelection::LogVisSelectLog);
+                        }
+
                         ui.add_space(bottom_padding);
                     });
                 });
@@ -226,9 +285,20 @@ impl ModeSelector {
 }
 
 /// The three operational modes available in the application.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ModeSelection {
+    /// Simulation mode - single scene file selection.
     Simulation,
-    RealtimeTracking,
-    LogVisualization,
+    /// Real-time tracking - scene file selection step.
+    RealtimeSelectScene,
+    /// Real-time tracking - log file selection step.
+    RealtimeSelectLog,
+    /// Real-time tracking - ready to start (both files selected).
+    RealtimeTracking { scene_path: String, log_path: String },
+    /// Log visualization - scene file selection step.
+    LogVisSelectScene,
+    /// Log visualization - log file selection step.
+    LogVisSelectLog,
+    /// Log visualization - ready to start (both files selected).
+    LogVisualization { scene_path: String, log_path: String },
 }

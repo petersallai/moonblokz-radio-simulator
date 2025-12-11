@@ -830,14 +830,25 @@ fn adjust_auto_speed(
 ///    per node (to preserve order), compute SINR and collisions, and deliver RX.
 /// 4) Adjust simulation speed if auto-speed is enabled based on observed delay.
 #[embassy_executor::task]
-pub async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshQueueSender, ui_command_rx: UICommandQueueReceiver) {
+pub async fn network_task(
+    spawner: Spawner,
+    ui_refresh_tx: UIRefreshQueueSender,
+    ui_command_rx: UICommandQueueReceiver,
+    scene_path: Option<String>,
+) {
     // Global counters for the UI
     let mut total_collision = 0;
     let mut total_received_packets = 0;
     let mut total_sent_packets = 0;
 
-    // Wait for configuration file
-    let config_file_path = wait_for_config_file(&ui_command_rx).await;
+    // Get configuration file path (either from parameter or wait for UI command)
+    let config_file_path = match scene_path {
+        Some(path) => {
+            log::info!("Using provided scene path: {}", path);
+            path
+        }
+        None => wait_for_config_file(&ui_command_rx).await,
+    };
 
     // Load and parse scene
     let scene = match load_scene(&config_file_path, &ui_refresh_tx).await {
@@ -929,6 +940,14 @@ pub async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshQueueSender,
                 }
                 UICommand::SetAutoSpeed(enabled) => {
                     auto_speed_enabled = enabled;
+                }
+                UICommand::StartMode { .. } => {
+                    // StartMode is handled by the mode selector before simulation starts
+                    log::debug!("StartMode command ignored in running simulation");
+                }
+                UICommand::SeekAnalyzer(_) => {
+                    // SeekAnalyzer only applies to log visualization mode
+                    log::debug!("SeekAnalyzer command ignored in simulation mode");
                 }
             },
             Either3::Third(_) => {

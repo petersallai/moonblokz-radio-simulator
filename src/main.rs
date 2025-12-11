@@ -42,6 +42,8 @@ use env_logger::Builder;
 use log::{LevelFilter, error, info};
 use std::thread;
 
+mod analyzer;
+mod common;
 mod simulation;
 mod time_driver;
 mod ui;
@@ -66,10 +68,11 @@ pub type UICommandQueueReceiver = embassy_sync::channel::Receiver<'static, Criti
 /// Sender side of the UI command channel.
 pub type UICommandQueueSender = embassy_sync::channel::Sender<'static, CriticalSectionRawMutex, ui::UICommand, UI_COMMAND_CHANNEL_SIZE>;
 
-/// Initialize the Embassy executor and spawn the main network task.
+/// Initialize the Embassy executor and spawn the mode dispatcher task.
 ///
 /// This function is called once the Embassy executor is running on its dedicated thread.
-/// It spawns the central `network_task` which coordinates all simulated nodes.
+/// It spawns a dispatcher that waits for mode selection from the UI, then spawns
+/// either the simulation network_task or the analyzer_task based on the selected mode.
 ///
 /// # Parameters
 ///
@@ -77,7 +80,62 @@ pub type UICommandQueueSender = embassy_sync::channel::Sender<'static, CriticalS
 /// * `ui_refresh_tx` - Channel sender for pushing UI updates
 /// * `ui_command_rx` - Channel receiver for receiving UI commands
 fn embassy_init(spawner: Spawner, ui_refresh_tx: UIRefreshQueueSender, ui_command_rx: UICommandQueueReceiver) {
-    let _ = spawner.spawn(simulation::network_task(spawner, ui_refresh_tx, ui_command_rx));
+    let _ = spawner.spawn(mode_dispatcher_task(spawner, ui_refresh_tx, ui_command_rx));
+}
+
+/// Mode dispatcher task that waits for mode selection and spawns the appropriate task.
+///
+/// This task runs on the Embassy executor and waits for a `StartMode` command from the UI.
+/// Depending on the selected mode, it spawns either:
+/// - `network_task` for Simulation mode
+/// - `analyzer_task` for RealtimeTracking or LogVisualization modes
+#[embassy_executor::task]
+async fn mode_dispatcher_task(spawner: Spawner, ui_refresh_tx: UIRefreshQueueSender, ui_command_rx: UICommandQueueReceiver) {
+    log::info!("Mode dispatcher waiting for mode selection...");
+
+    loop {
+        let cmd = ui_command_rx.receive().await;
+        match cmd {
+            ui::UICommand::StartMode { mode, scene_path, log_path } => {
+                log::info!("Mode selected: {:?}", mode);
+                match mode {
+                    ui::OperatingMode::Simulation => {
+                        // Simulation mode: spawn network_task with scene path
+                        let _ = ui_refresh_tx.send(ui::UIRefreshState::ModeChanged(mode)).await;
+                        let _ = spawner.spawn(simulation::network_task(spawner, ui_refresh_tx, ui_command_rx, Some(scene_path.clone())));
+                        log::info!("Simulation mode started, scene: {}", scene_path);
+                        return;
+                    }
+                    ui::OperatingMode::RealtimeTracking | ui::OperatingMode::LogVisualization => {
+                        // Analyzer modes: spawn analyzer_task
+                        let log_path = log_path.expect("Log path required for analyzer modes");
+                        let analyzer_mode = match mode {
+                            ui::OperatingMode::RealtimeTracking => analyzer::AnalyzerMode::RealtimeTracking,
+                            ui::OperatingMode::LogVisualization => analyzer::AnalyzerMode::LogVisualization,
+                            _ => unreachable!(),
+                        };
+                        let _ = ui_refresh_tx.send(ui::UIRefreshState::ModeChanged(mode)).await;
+                        let _ = spawner.spawn(analyzer::analyzer_task(analyzer_mode, scene_path, log_path, ui_refresh_tx, ui_command_rx));
+                        log::info!("Analyzer mode started");
+                        return;
+                    }
+                }
+            }
+            ui::UICommand::LoadFile(path) => {
+                // Legacy path: Simulation mode with direct LoadFile
+                // This happens when user selects Simulation and picks a scene file (old behavior)
+                log::info!("Direct LoadFile received (Simulation mode): {}", path);
+                let _ = ui_refresh_tx.send(ui::UIRefreshState::ModeChanged(ui::OperatingMode::Simulation)).await;
+                // Spawn the network_task with the scene path
+                let _ = spawner.spawn(simulation::network_task(spawner, ui_refresh_tx, ui_command_rx, Some(path)));
+                return;
+            }
+            _ => {
+                // Ignore other commands before mode is selected
+                log::debug!("Ignoring command before mode selection: {:?}", cmd);
+            }
+        }
+    }
 }
 
 /// Embedded PNG icon data for the application window.
