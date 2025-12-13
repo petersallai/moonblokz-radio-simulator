@@ -9,6 +9,7 @@
 //! 4) Adjust simulation speed if auto-speed is enabled based on observed delay.
 
 use anyhow::Context;
+use core::time;
 use embassy_executor::Spawner;
 use embassy_futures::select::{Either3, select3};
 use embassy_time::{Duration, Instant, Timer};
@@ -830,12 +831,7 @@ fn adjust_auto_speed(
 ///    per node (to preserve order), compute SINR and collisions, and deliver RX.
 /// 4) Adjust simulation speed if auto-speed is enabled based on observed delay.
 #[embassy_executor::task]
-pub async fn network_task(
-    spawner: Spawner,
-    ui_refresh_tx: UIRefreshQueueSender,
-    ui_command_rx: UICommandQueueReceiver,
-    scene_path: Option<String>,
-) {
+pub async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshQueueSender, ui_command_rx: UICommandQueueReceiver, scene_path: Option<String>) {
     // Global counters for the UI
     let mut total_collision = 0;
     let mut total_received_packets = 0;
@@ -961,14 +957,13 @@ pub async fn network_task(
                     let time_delay = now.duration_since(next_airtime_event);
                     delay_for_autospeed = Some(time_delay);
                     if time_delay > Duration::from_millis(10) {
-                        let delay_ms = time_delay.as_millis() as u32;
                         if !delay_warning_issued {
                             delay_warning_issued = true;
-                            let _ = ui_refresh_tx.try_send(UIRefreshState::SimulationDelayWarningChanged(delay_ms));
+                            let _ = ui_refresh_tx.try_send(UIRefreshState::SimulationDelayWarningChanged(time_delay));
                         }
                     } else if delay_warning_issued {
                         delay_warning_issued = false;
-                        let _ = ui_refresh_tx.try_send(UIRefreshState::SimulationDelayWarningChanged(0));
+                        let _ = ui_refresh_tx.try_send(UIRefreshState::SimulationDelayWarningChanged(Duration::from_millis(0)));
                     }
                 }
 

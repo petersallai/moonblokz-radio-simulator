@@ -24,6 +24,7 @@
 //! - Green: Excellent quality (≥ excellent_limit)
 
 use crate::ui::{AppState, OperatingMode, UICommand, color_for_message_type};
+use chrono::{Local, TimeZone};
 use eframe::egui;
 use egui::Color32;
 use std::cmp::max;
@@ -256,7 +257,26 @@ fn render_message_table(ui: &mut egui::Ui, state: &AppState, node_info: &crate::
                     _ => "Unknown",
                 };
                 let from_string = if is_self { "Sent msg".to_string() } else { format!("#{}", msg.sender_node) };
-                let secs = msg.timestamp.duration_since(state.start_time).as_secs();
+
+                // Format time based on operating mode
+                let time_string = match state.operating_mode {
+                    OperatingMode::Simulation => {
+                        // In simulation mode, show seconds since start
+                        let secs = msg.timestamp.duration_since(state.start_time).as_secs();
+                        format!("{} s", secs)
+                    }
+                    OperatingMode::RealtimeTracking | OperatingMode::LogVisualization => {
+                        // In analyzer modes, timestamp is Unix epoch milliseconds
+                        // Convert to local timezone with DST handling
+                        let timestamp_secs = msg.timestamp.as_secs() as i64;
+                        let local_time = Local.timestamp_opt(timestamp_secs, 0).single();
+                        match local_time {
+                            Some(dt) => dt.format("%H:%M:%S").to_string(),
+                            None => "--:--:--".to_string(),
+                        }
+                    }
+                };
+
                 let message_type_color = color_for_message_type(msg.message_type, 1.0);
                 let link_quality_string = if is_self { "-".to_string() } else { format!("{}", msg.link_quality) };
 
@@ -265,7 +285,7 @@ fn render_message_table(ui: &mut egui::Ui, state: &AppState, node_info: &crate::
                         let rect = ui.available_rect_before_wrap();
                         ui.painter().rect_filled(rect, 0.0, fill);
                     }
-                    ui.colored_label(row_color, format!("{} s", secs));
+                    ui.colored_label(row_color, time_string.clone());
                 });
                 row.col(|ui| {
                     if let Some(fill) = collision_fill {

@@ -9,7 +9,9 @@
 //! real-time feedback on simulation performance and network behavior.
 
 use crate::ui::{AppState, OperatingMode, UICommand};
+use chrono::{Local, TimeZone};
 use eframe::egui;
+use embassy_time::Duration;
 
 /// Render the top panel with metrics and controls.
 ///
@@ -49,11 +51,27 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
                 ui.separator();
                 ui.horizontal(|ui| {
                     ui.label("Sim time:");
-                    // Fixed-width, monospace time so following labels don't shift horizontally
-                    // Use embassy_time Instant for simulation time (scaled by driver)
-                    let sim_secs = embassy_time::Instant::now().as_secs();
-                    let sim_secs_with_s = format!("{}s", sim_secs);
-                    let sim_time_str = format!("{:<6}", sim_secs_with_s); // fixed 6 chars, left-aligned (e.g., "42    ")
+                    // Format time based on operating mode
+                    let sim_time_str = match state.operating_mode {
+                        OperatingMode::Simulation => {
+                            // In simulation mode, show seconds since start
+                            let sim_secs = embassy_time::Instant::now().as_secs();
+                            format!("{:<6}", format!("{}s", sim_secs))
+                        }
+                        OperatingMode::RealtimeTracking | OperatingMode::LogVisualization => {
+                            // In analyzer modes, use last_simulation_time with local timezone
+                            if let Some(last_sim_time) = state.last_simulation_time {
+                                let timestamp_secs = last_sim_time.as_secs() as i64;
+                                let local_time = Local.timestamp_opt(timestamp_secs, 0).single();
+                                match local_time {
+                                    Some(dt) => dt.format("%H:%M:%S").to_string(),
+                                    None => "--:--:--".to_string(),
+                                }
+                            } else {
+                                "--:--:--".to_string()
+                            }
+                        }
+                    };
                     ui.label(egui::RichText::new(sim_time_str).monospace().strong());
                     ui.label("Total TX: ");
                     ui.label(egui::RichText::new(state.total_sent_packets.to_string()).strong());
@@ -277,18 +295,15 @@ fn render_controls(ui: &mut egui::Ui, state: &mut AppState) {
         OperatingMode::RealtimeTracking => {
             // Real-time mode: show delay indicator instead of speed controls
             ui.horizontal(|ui| {
-                ui.label("Mode: Real-time Tracking");
+                ui.label("Mode:");
+                ui.label(egui::RichText::new("Real-time Tracking").strong());
             });
             ui.horizontal(|ui| {
                 ui.label("Delay:");
-                let delay_color = if state.analyzer_delay > 1000 {
-                    egui::Color32::RED
-                } else if state.analyzer_delay > 500 {
-                    egui::Color32::YELLOW
-                } else {
-                    egui::Color32::GREEN
-                };
-                ui.colored_label(delay_color, format!("{} ms", state.analyzer_delay));
+                let total_secs = state.simulation_delay.as_secs();
+                let mins = total_secs / 60;
+                let secs = total_secs % 60;
+                ui.label(egui::RichText::new(format!("{:02}:{:02}", mins, secs)).strong());
             });
         }
         OperatingMode::LogVisualization => {
@@ -317,7 +332,7 @@ fn render_controls(ui: &mut egui::Ui, state: &mut AppState) {
     }
 
     // Show delay warning for simulation mode
-    if state.operating_mode == OperatingMode::Simulation && state.simulation_delay > 10 {
+    if state.operating_mode == OperatingMode::Simulation && state.simulation_delay > Duration::from_millis(10) {
         ui.separator();
         let warn_text = format!("Warning! Simulation delay is more than 10 milliseconds ({} ms)", state.simulation_delay);
         ui.label(egui::RichText::new(warn_text).color(egui::Color32::RED));

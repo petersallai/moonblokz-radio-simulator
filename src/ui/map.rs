@@ -30,7 +30,7 @@ use crate::ui::app_state::{NODE_RADIO_TRANSFER_INDICATOR_TIMEOUT, color_for_mess
 use crate::ui::{AppState, UICommand};
 use eframe::egui;
 use egui::Color32;
-use std::time::Duration;
+use embassy_time::{Duration, Instant};
 
 /// Render the central map panel showing the simulation world.
 ///
@@ -259,7 +259,7 @@ fn draw_nodes(painter: &egui::Painter, rect: egui::Rect, state: &mut AppState, u
     let expired_indicators: Vec<u32> = state
         .node_radio_transfer_indicators
         .iter()
-        .filter(|(_, (expiry, _, _))| *expiry <= std::time::Instant::now())
+        .filter(|(_, (expiry, _, _))| *expiry <= Instant::now())
         .map(|(id, _)| *id)
         .collect();
 
@@ -314,7 +314,7 @@ fn draw_nodes(painter: &egui::Painter, rect: egui::Rect, state: &mut AppState, u
 /// * `node_id` - ID of the node to check for active indicators
 fn draw_radio_indicator(painter: &egui::Painter, rect: egui::Rect, state: &AppState, pos: &egui::Pos2, node_id: u32) {
     if let Some((expiry, message_type, distance)) = state.node_radio_transfer_indicators.get(&node_id) {
-        let remaining = *expiry - std::time::Instant::now();
+        let remaining = *expiry - Instant::now();
         if remaining > Duration::from_millis(0) {
             let alpha = (remaining.as_millis() as f32 / NODE_RADIO_TRANSFER_INDICATOR_TIMEOUT as f32).clamp(0.0, 1.0);
             // Distance is in meters, convert to pixels

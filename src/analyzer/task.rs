@@ -296,20 +296,8 @@ async fn process_event(
         }
     }
 
-    // In real-time mode, calculate and send delay
-    if state.reference_instant.is_some() && state.reference_timestamp.is_some() {
-        if let (Some(ref_instant), Some(ref_ts)) = (state.reference_instant, state.reference_timestamp) {
-            let elapsed = ref_instant.elapsed();
-            let log_offset = timestamp.signed_duration_since(ref_ts);
-
-            if let Ok(log_offset_duration) = log_offset.to_std() {
-                if elapsed > log_offset_duration {
-                    let delay_ms = (elapsed - log_offset_duration).as_millis() as u64;
-                    let _ = ui_refresh_tx.try_send(UIRefreshState::AnalyzerDelay(delay_ms)).ok();
-                }
-            }
-        }
-    }
+    // Send timestamp update for UI display (as embassy_time::Instant from Unix epoch)
+    let _ = ui_refresh_tx.try_send(UIRefreshState::TimeUpdated(convert_to_embassy_instant(timestamp))).ok();
 }
 
 /// Build NodeInfo from the analyzer's packet history for a given node.
@@ -330,8 +318,8 @@ fn build_node_info(node_id: u32, state: &AnalyzerState) -> NodeInfo {
         history
             .iter()
             .filter_map(|record| {
-                // Convert DateTime<Utc> to embassy_time::Instant relative to reference
-                let timestamp = convert_to_embassy_instant(record.timestamp, state);
+                // Convert DateTime<Utc> to embassy_time::Instant based on absolute timestamp
+                let timestamp = convert_to_embassy_instant(record.timestamp);
 
                 match &record.event {
                     LogEvent::SendPacket {
@@ -381,22 +369,10 @@ fn build_node_info(node_id: u32, state: &AnalyzerState) -> NodeInfo {
 
 /// Convert a DateTime<Utc> timestamp to an embassy_time::Instant.
 ///
-/// Uses the analyzer's reference timestamp to calculate an offset from
-/// the current embassy_time::Instant.
-fn convert_to_embassy_instant(timestamp: DateTime<Utc>, state: &AnalyzerState) -> embassy_time::Instant {
-    match (state.reference_timestamp, state.reference_instant) {
-        (Some(ref_ts), Some(_ref_instant)) => {
-            // Calculate offset from reference timestamp
-            let offset = timestamp.signed_duration_since(ref_ts);
-            let offset_ms = offset.num_milliseconds().max(0) as u64;
-
-            // Return an Instant offset from a base time
-            // Note: This is an approximation since we can't perfectly sync log time to embassy time
-            embassy_time::Instant::from_millis(offset_ms)
-        }
-        _ => {
-            // No reference set yet, use current instant
-            embassy_time::Instant::now()
-        }
-    }
+/// Creates an instant based on the absolute timestamp by converting
+/// it to milliseconds since Unix epoch.
+fn convert_to_embassy_instant(timestamp: DateTime<Utc>) -> embassy_time::Instant {
+    // Convert absolute timestamp to milliseconds since Unix epoch
+    let timestamp_ms = timestamp.timestamp_millis().max(0) as u64;
+    embassy_time::Instant::from_millis(timestamp_ms)
 }

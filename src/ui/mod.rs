@@ -32,6 +32,7 @@ pub mod top_panel;
 use crate::simulation::{NodeMessage, Point};
 
 pub use app_state::{AppState, color_for_message_type};
+use embassy_time::{Duration, Instant};
 
 /// The three operational modes available in the application.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,8 +79,8 @@ pub enum UIRefreshState {
     NodeInfo(NodeInfo),
     /// Update global packet counters. Parameters: total sent, total received, total collisions.
     RadioMessagesCountUpdated(u64, u64, u64),
-    /// Update the simulation delay warning. Parameter: delay in milliseconds (0 = no warning).
-    SimulationDelayWarningChanged(u32),
+    /// Update the simulation delay warning. Parameter: delay.
+    SimulationDelayWarningChanged(Duration),
     /// A node was reached during a measurement. Parameters: node ID, measurement ID.
     NodeReachedInMeasurement(u32, u32),
     /// The simulation speed percentage changed (e.g., via auto-speed control).
@@ -96,6 +97,7 @@ pub enum UIRefreshState {
     VisualizationEnded,
     /// Current operating mode changed.
     ModeChanged(OperatingMode),
+    TimeUpdated(Instant),
 }
 
 /// UI-specific representation of a node's state.

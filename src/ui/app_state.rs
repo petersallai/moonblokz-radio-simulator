@@ -21,11 +21,11 @@
 
 use eframe::egui;
 use egui::Color32;
+use embassy_time::Duration;
+use embassy_time::Instant;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::time::Duration;
-use std::time::Instant;
 
 use super::{NodeInfo, NodeUIState, OperatingMode, UICommand, UIRefreshState, mode_selector};
 use crate::simulation::Obstacle;
@@ -79,8 +79,10 @@ pub struct AppState {
     pub total_received_packets: u64,
     /// Total packet collisions detected.
     pub total_collision: u64,
-    /// Current simulation delay in milliseconds (0 = no delay warning).
-    pub simulation_delay: u32,
+    /// Current simulation delay
+    pub simulation_delay: Duration,
+
+    pub last_simulation_time: Option<embassy_time::Instant>,
 
     // Measurement state
     /// Unique identifier for the current measurement (0 = no active measurement).
@@ -206,7 +208,7 @@ impl AppState {
             total_sent_packets: 0,
             total_received_packets: 0,
             total_collision: 0,
-            simulation_delay: 0,
+            simulation_delay: Duration::from_millis(0),
             measurement_identifier: 0,
             reached_nodes: HashSet::new(),
             measurement_start_time: embassy_time::Instant::now(),
@@ -239,6 +241,7 @@ impl AppState {
             operating_mode: OperatingMode::Simulation,
             analyzer_delay: 0,
             visualization_ended: false,
+            last_simulation_time: None,
         }
     }
 
@@ -420,7 +423,7 @@ impl AppState {
         self.total_sent_packets = 0;
         self.total_received_packets = 0;
         self.total_collision = 0;
-        self.simulation_delay = 0;
+        self.simulation_delay = Duration::from_millis(0);
         self.measurement_identifier = 0;
         self.reached_nodes.clear();
         self.echo_result_count = 0;
@@ -570,7 +573,7 @@ impl eframe::App for AppState {
         }
 
         // Repaint periodically so background updates are visible without input
-        ctx.request_repaint_after(Duration::from_millis(20));
+        ctx.request_repaint_after(std::time::Duration::from_millis(20));
 
         if self.last_node_info_update.elapsed() > Duration::from_secs(1) {
             if let Some(node_info) = &self.node_info {
@@ -659,6 +662,16 @@ impl eframe::App for AppState {
                 }
                 UIRefreshState::ModeChanged(mode) => {
                     self.operating_mode = mode;
+                }
+                UIRefreshState::TimeUpdated(time) => {
+                    let current_epoch = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+                    let current_instant = embassy_time::Instant::from_secs(current_epoch);
+                    self.last_simulation_time = Some(time);
+                    if time < current_instant {
+                        self.simulation_delay = current_instant.duration_since(time);
+                    } else {
+                        self.simulation_delay = Duration::from_millis(0);
+                    }
                 }
             }
         }
