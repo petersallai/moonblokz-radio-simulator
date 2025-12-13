@@ -8,10 +8,12 @@
 
 use chrono::{DateTime, Utc};
 use embassy_time::{Duration, Timer};
+use std::collections::HashMap;
 use std::time::Instant;
 
 use crate::common::scene::{Scene, SceneMode, load_scene};
-use crate::ui::{NodeUIState, UICommand, UIRefreshState};
+use crate::simulation::types::NodeMessage;
+use crate::ui::{NodeInfo, NodeUIState, UICommand, UIRefreshState};
 use crate::{UICommandQueueReceiver, UIRefreshQueueSender};
 
 use super::log_loader::LogLoader;
@@ -47,6 +49,9 @@ pub async fn analyzer_task(
         }
     };
 
+    // Build node effective distances map for radio message visualization
+    let node_effective_distances: HashMap<u32, u32> = scene.nodes.iter().map(|n| (n.node_id, n.effective_distance.unwrap_or(100))).collect();
+
     // Initialize UI with scene data
     initialize_scene_ui(&scene, &ui_refresh_tx).await;
 
@@ -76,8 +81,10 @@ pub async fn analyzer_task(
         // Check for UI commands (non-blocking)
         while let Ok(cmd) = ui_command_rx.try_receive() {
             match cmd {
-                UICommand::RequestNodeInfo(_node_id) => {
-                    // TODO: Build NodeInfo from packet history and send
+                UICommand::RequestNodeInfo(node_id) => {
+                    // Build NodeInfo from packet history
+                    let node_info = build_node_info(node_id, &state);
+                    let _ = ui_refresh_tx.try_send(UIRefreshState::NodeInfo(node_info)).ok();
                 }
                 UICommand::SeekAnalyzer(time) => {
                     // TODO: Implement seeking for log visualization
@@ -96,7 +103,7 @@ pub async fn analyzer_task(
                 // EOF in log visualization mode
                 let _ = ui_refresh_tx.send(UIRefreshState::VisualizationEnded).await;
                 log::info!("Log visualization ended (EOF reached)");
-                
+
                 // Keep task alive to handle UI commands
                 loop {
                     if let Ok(cmd) = ui_command_rx.try_receive() {
@@ -116,7 +123,7 @@ pub async fn analyzer_task(
         let (timestamp, event) = match parse_log_line(&line) {
             Some(parsed) => parsed,
             None => {
-                log::debug!("Unparseable log line: {}", line);
+                log::trace!("Skipping line (not telemetry): {}", line);
                 continue;
             }
         };
@@ -125,7 +132,16 @@ pub async fn analyzer_task(
         synchronize_time(&mut state, timestamp, mode).await;
 
         // Process the event
-        process_event(&event, timestamp, &mut state, &ui_refresh_tx, &mut total_sent, &mut total_received).await;
+        process_event(
+            &event,
+            timestamp,
+            &mut state,
+            &ui_refresh_tx,
+            &mut total_sent,
+            &mut total_received,
+            &node_effective_distances,
+        )
+        .await;
     }
 }
 
@@ -145,11 +161,7 @@ async fn initialize_scene_ui(scene: &Scene, ui_refresh_tx: &UIRefreshQueueSender
     let _ = ui_refresh_tx.send(UIRefreshState::NodesUpdated(node_states)).await;
 
     // Publish obstacles (using From trait for conversion)
-    let obstacles: Vec<crate::simulation::Obstacle> = scene
-        .obstacles
-        .iter()
-        .map(|o| o.into())
-        .collect();
+    let obstacles: Vec<crate::simulation::Obstacle> = scene.obstacles.iter().map(|o| o.into()).collect();
 
     let _ = ui_refresh_tx.send(UIRefreshState::ObstaclesUpdated(obstacles)).await;
 
@@ -186,11 +198,11 @@ async fn synchronize_time(state: &mut AnalyzerState, timestamp: DateTime<Utc>, m
             if log_offset_duration > elapsed {
                 // Log is ahead of real time - wait
                 let wait_duration = log_offset_duration - elapsed;
-                
+
                 // Cap wait time to prevent very long waits
                 let max_wait = std::time::Duration::from_secs(10);
                 let actual_wait = wait_duration.min(max_wait);
-                
+
                 if mode == AnalyzerMode::LogVisualization {
                     Timer::after(Duration::from_micros(actual_wait.as_micros() as u64)).await;
                 }
@@ -216,20 +228,25 @@ async fn process_event(
     ui_refresh_tx: &UIRefreshQueueSender,
     total_sent: &mut u64,
     total_received: &mut u64,
+    node_effective_distances: &HashMap<u32, u32>,
 ) {
     match event {
         LogEvent::SendPacket { node_id, message_type, .. } => {
             *total_sent += 1;
 
             // Store in history
-            state.add_packet_record(*node_id, NodePacketRecord {
-                timestamp,
-                event: event.clone(),
-            });
+            state.add_packet_record(
+                *node_id,
+                NodePacketRecord {
+                    timestamp,
+                    event: event.clone(),
+                },
+            );
 
-            // Notify UI of transmission (use a default distance of 100 for now)
+            // Notify UI of transmission using the node's effective distance
+            let effective_distance = node_effective_distances.get(node_id).copied().unwrap_or(100);
             let _ = ui_refresh_tx
-                .try_send(UIRefreshState::NodeSentRadioMessage(*node_id, *message_type, 100))
+                .try_send(UIRefreshState::NodeSentRadioMessage(*node_id, *message_type, effective_distance))
                 .ok();
 
             // Update counters
@@ -241,10 +258,13 @@ async fn process_event(
             *total_received += 1;
 
             // Store in history
-            state.add_packet_record(*node_id, NodePacketRecord {
-                timestamp,
-                event: event.clone(),
-            });
+            state.add_packet_record(
+                *node_id,
+                NodePacketRecord {
+                    timestamp,
+                    event: event.clone(),
+                },
+            );
 
             // Update counters
             let _ = ui_refresh_tx
@@ -255,14 +275,17 @@ async fn process_event(
             state.active_measurement_id = Some(*sequence);
             log::info!("Measurement started by node {} with sequence {}", node_id, sequence);
         }
-        LogEvent::ReceivedFullMessage { node_id, message_type, sequence, .. } => {
+        LogEvent::ReceivedFullMessage {
+            node_id,
+            message_type,
+            sequence,
+            ..
+        } => {
             // If this is an AddBlock message (type 6), it might be part of a measurement
             if *message_type == 6 {
                 if let Some(active_id) = state.active_measurement_id {
                     if active_id == *sequence {
-                        let _ = ui_refresh_tx
-                            .try_send(UIRefreshState::NodeReachedInMeasurement(*node_id, *sequence))
-                            .ok();
+                        let _ = ui_refresh_tx.try_send(UIRefreshState::NodeReachedInMeasurement(*node_id, *sequence)).ok();
                     }
                 }
             }
@@ -278,13 +301,102 @@ async fn process_event(
         if let (Some(ref_instant), Some(ref_ts)) = (state.reference_instant, state.reference_timestamp) {
             let elapsed = ref_instant.elapsed();
             let log_offset = timestamp.signed_duration_since(ref_ts);
-            
+
             if let Ok(log_offset_duration) = log_offset.to_std() {
                 if elapsed > log_offset_duration {
                     let delay_ms = (elapsed - log_offset_duration).as_millis() as u64;
                     let _ = ui_refresh_tx.try_send(UIRefreshState::AnalyzerDelay(delay_ms)).ok();
                 }
             }
+        }
+    }
+}
+
+/// Build NodeInfo from the analyzer's packet history for a given node.
+///
+/// Converts stored `NodePacketRecord` entries into `NodeMessage` format
+/// expected by the UI.
+///
+/// # Parameters
+///
+/// * `node_id` - The node to build info for
+/// * `state` - Analyzer state containing packet histories
+///
+/// # Returns
+///
+/// A `NodeInfo` struct with the node's message history.
+fn build_node_info(node_id: u32, state: &AnalyzerState) -> NodeInfo {
+    let messages = if let Some(history) = state.node_packet_histories.get(&node_id) {
+        history
+            .iter()
+            .filter_map(|record| {
+                // Convert DateTime<Utc> to embassy_time::Instant relative to reference
+                let timestamp = convert_to_embassy_instant(record.timestamp, state);
+
+                match &record.event {
+                    LogEvent::SendPacket {
+                        message_type,
+                        packet_index,
+                        packet_count,
+                        length,
+                        ..
+                    } => Some(NodeMessage {
+                        timestamp,
+                        message_type: *message_type,
+                        packet_size: *length,
+                        packet_count: *packet_count,
+                        packet_index: *packet_index,
+                        sender_node: node_id, // Self-sent
+                        link_quality: 0,
+                        collision: false,
+                    }),
+                    LogEvent::ReceivePacket {
+                        sender_id,
+                        message_type,
+                        packet_index,
+                        packet_count,
+                        length,
+                        link_quality,
+                        ..
+                    } => Some(NodeMessage {
+                        timestamp,
+                        message_type: *message_type,
+                        packet_size: *length,
+                        packet_count: *packet_count,
+                        packet_index: *packet_index,
+                        sender_node: *sender_id,
+                        link_quality: *link_quality,
+                        collision: false,
+                    }),
+                    _ => None, // Skip other event types
+                }
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    NodeInfo { node_id, messages }
+}
+
+/// Convert a DateTime<Utc> timestamp to an embassy_time::Instant.
+///
+/// Uses the analyzer's reference timestamp to calculate an offset from
+/// the current embassy_time::Instant.
+fn convert_to_embassy_instant(timestamp: DateTime<Utc>, state: &AnalyzerState) -> embassy_time::Instant {
+    match (state.reference_timestamp, state.reference_instant) {
+        (Some(ref_ts), Some(_ref_instant)) => {
+            // Calculate offset from reference timestamp
+            let offset = timestamp.signed_duration_since(ref_ts);
+            let offset_ms = offset.num_milliseconds().max(0) as u64;
+
+            // Return an Instant offset from a base time
+            // Note: This is an approximation since we can't perfectly sync log time to embassy time
+            embassy_time::Instant::from_millis(offset_ms)
+        }
+        _ => {
+            // No reference set yet, use current instant
+            embassy_time::Instant::now()
         }
     }
 }

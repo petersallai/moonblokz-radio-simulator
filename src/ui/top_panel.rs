@@ -8,8 +8,8 @@
 //! The panel uses a 3-column layout to organize information clearly and provides
 //! real-time feedback on simulation performance and network behavior.
 
-use eframe::egui;
 use crate::ui::{AppState, OperatingMode, UICommand};
+use eframe::egui;
 
 /// Render the top panel with metrics and controls.
 ///
@@ -78,11 +78,14 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
                     ui.label("packets/minutes");
                 });
 
-                ui.horizontal(|ui| {
-                    ui.label("Collision rate:");
-                    ui.label(egui::RichText::new(format!("{:.2}", collision_rate)).strong());
-                    ui.label("%");
-                });
+                // Only show collision rate in Simulation mode (not available in analyzer modes)
+                if state.operating_mode == OperatingMode::Simulation {
+                    ui.horizontal(|ui| {
+                        ui.label("Collision rate:");
+                        ui.label(egui::RichText::new(format!("{:.2}", collision_rate)).strong());
+                        ui.label("%");
+                    });
+                }
             });
 
             // Column 2: Measured distribution
@@ -323,6 +326,6 @@ fn render_controls(ui: &mut egui::Ui, state: &mut AppState) {
     // Show visualization ended indicator
     if state.visualization_ended {
         ui.separator();
-        ui.label(egui::RichText::new("✓ Log visualization complete").color(egui::Color32::GREEN));
+        ui.label(egui::RichText::new("✅ Log visualization complete").color(egui::Color32::GREEN));
     }
 }

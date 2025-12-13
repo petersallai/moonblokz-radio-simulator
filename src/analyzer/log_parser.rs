@@ -6,8 +6,8 @@
 //! - *TM3*: Start measurement
 //! - *TM4*: Full message received
 
-use chrono::{DateTime, Utc};
 use super::types::LogEvent;
+use chrono::{DateTime, Utc};
 
 /// Parse a log line and extract timestamp and event.
 ///
@@ -37,7 +37,6 @@ use super::types::LogEvent;
 pub fn parse_log_line(line: &str) -> Option<(DateTime<Utc>, LogEvent)> {
     // Extract timestamp from the start of the line
     let timestamp = parse_timestamp(line)?;
-
     // Find the node ID pattern [xxxx]
     let node_id = extract_node_id(line)?;
 
@@ -63,14 +62,12 @@ fn parse_timestamp(line: &str) -> Option<DateTime<Utc>> {
     }
 
     let timestamp_str = &line[..20];
-    DateTime::parse_from_rfc3339(timestamp_str)
-        .ok()
-        .map(|dt| dt.with_timezone(&Utc))
+    DateTime::parse_from_rfc3339(timestamp_str).ok().map(|dt| dt.with_timezone(&Utc))
 }
 
-/// Extract node ID from [xxxx] pattern.
+/// Extract node ID from the last [xxxx] pattern in the line.
 fn extract_node_id(line: &str) -> Option<u32> {
-    let start = line.find('[')?;
+    let start = line.rfind('[')?;
     let end = line[start..].find(']')? + start;
     let id_str = &line[start + 1..end];
     id_str.parse().ok()
@@ -208,7 +205,15 @@ mod tests {
         let (timestamp, event) = result.unwrap();
         assert_eq!(timestamp.year(), 2025);
 
-        if let LogEvent::SendPacket { node_id, message_type, sequence, packet_index, packet_count, length } = event {
+        if let LogEvent::SendPacket {
+            node_id,
+            message_type,
+            sequence,
+            packet_index,
+            packet_count,
+            length,
+        } = event
+        {
             assert_eq!(node_id, 3094);
             assert_eq!(message_type, 6);
             assert_eq!(sequence, Some(30940779));
@@ -227,7 +232,14 @@ mod tests {
         assert!(result.is_some());
 
         let (_, event) = result.unwrap();
-        if let LogEvent::ReceivePacket { node_id, sender_id, message_type, link_quality, .. } = event {
+        if let LogEvent::ReceivePacket {
+            node_id,
+            sender_id,
+            message_type,
+            link_quality,
+            ..
+        } = event
+        {
             assert_eq!(node_id, 3094);
             assert_eq!(sender_id, 3093);
             assert_eq!(message_type, 6);
@@ -259,7 +271,14 @@ mod tests {
         assert!(result.is_some());
 
         let (_, event) = result.unwrap();
-        if let LogEvent::ReceivedFullMessage { node_id, sender_id, message_type, sequence, length } = event {
+        if let LogEvent::ReceivedFullMessage {
+            node_id,
+            sender_id,
+            message_type,
+            sequence,
+            length,
+        } = event
+        {
             assert_eq!(node_id, 3094);
             assert_eq!(sender_id, 3093);
             assert_eq!(message_type, 6);

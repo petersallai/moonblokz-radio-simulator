@@ -50,7 +50,7 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
         if let Some(i) = state.selected {
             let p = &state.nodes[i];
             ui.horizontal(|ui| {
-                ui.label("Selected point:");
+                ui.label("Selected Node:");
                 ui.label(egui::RichText::new(format!("#{}", p.node_id)).strong().color(Color32::from_rgb(0, 128, 255)));
             });
             ui.horizontal(|ui| {
