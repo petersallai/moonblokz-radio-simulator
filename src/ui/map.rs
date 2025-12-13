@@ -314,16 +314,19 @@ fn draw_nodes(painter: &egui::Painter, rect: egui::Rect, state: &mut AppState, u
 /// * `node_id` - ID of the node to check for active indicators
 fn draw_radio_indicator(painter: &egui::Painter, rect: egui::Rect, state: &AppState, pos: &egui::Pos2, node_id: u32) {
     if let Some((expiry, message_type, distance)) = state.node_radio_transfer_indicators.get(&node_id) {
-        let remaining = *expiry - Instant::now();
-        if remaining > Duration::from_millis(0) {
-            let alpha = (remaining.as_millis() as f32 / NODE_RADIO_TRANSFER_INDICATOR_TIMEOUT as f32).clamp(0.0, 1.0);
-            // Distance is in meters, convert to pixels
-            let pixels_per_meter_x = rect.width() / state.width as f32;
-            let pixels_per_meter_y = rect.height() / state.height as f32;
-            let avg_pixels_per_meter = (pixels_per_meter_x + pixels_per_meter_y) / 2.0;
-            let radius = (*distance as f32 * avg_pixels_per_meter) * (1.0 - alpha);
-            let color = color_for_message_type(*message_type, alpha);
-            painter.circle_stroke(*pos, radius, egui::Stroke::new(1.0, color));
+        let now = Instant::now();
+        if *expiry > now {
+            let remaining = *expiry - Instant::now();
+            if remaining > Duration::from_millis(0) {
+                let alpha = (remaining.as_millis() as f32 / NODE_RADIO_TRANSFER_INDICATOR_TIMEOUT as f32).clamp(0.0, 1.0);
+                // Distance is in meters, convert to pixels
+                let pixels_per_meter_x = rect.width() / state.width as f32;
+                let pixels_per_meter_y = rect.height() / state.height as f32;
+                let avg_pixels_per_meter = (pixels_per_meter_x + pixels_per_meter_y) / 2.0;
+                let radius = (*distance as f32 * avg_pixels_per_meter) * (1.0 - alpha);
+                let color = color_for_message_type(*message_type, alpha);
+                painter.circle_stroke(*pos, radius, egui::Stroke::new(1.0, color));
+            }
         }
     }
 }

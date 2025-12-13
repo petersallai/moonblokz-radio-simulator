@@ -86,10 +86,6 @@ pub async fn analyzer_task(
                     let node_info = build_node_info(node_id, &state);
                     let _ = ui_refresh_tx.try_send(UIRefreshState::NodeInfo(node_info)).ok();
                 }
-                UICommand::SeekAnalyzer(time) => {
-                    // TODO: Implement seeking for log visualization
-                    log::debug!("Seek request to {} (not yet implemented)", time);
-                }
                 _ => {
                     // Ignore other commands in analyzer mode
                 }
@@ -106,14 +102,6 @@ pub async fn analyzer_task(
 
                 // Keep task alive to handle UI commands
                 loop {
-                    if let Ok(cmd) = ui_command_rx.try_receive() {
-                        match cmd {
-                            UICommand::SeekAnalyzer(_) => {
-                                // TODO: Could reset and replay
-                            }
-                            _ => {}
-                        }
-                    }
                     Timer::after(Duration::from_millis(100)).await;
                 }
             }
@@ -314,6 +302,7 @@ async fn process_event(
 ///
 /// A `NodeInfo` struct with the node's message history.
 fn build_node_info(node_id: u32, state: &AnalyzerState) -> NodeInfo {
+    log::info!("Building NodeInfo for node {}", node_id);
     let messages = if let Some(history) = state.node_packet_histories.get(&node_id) {
         history
             .iter()

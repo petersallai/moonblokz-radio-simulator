@@ -135,6 +135,4 @@ pub enum UICommand {
         scene_path: String,
         log_path: Option<String>,
     },
-    /// Seek to a specific time in log visualization (future enhancement).
-    SeekAnalyzer(u64),
 }
