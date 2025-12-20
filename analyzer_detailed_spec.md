@@ -160,6 +160,8 @@ pub async fn analyzer_task(
 5. Track packet history per node for `RequestNodeInfo` responses
 6. Update `last_processed_timestamp` for delay calculation in real-time mode
 
+The rationale behind this mainloop structure is to provide changes to the UI with a stable delay, but when some spikes appeared in the network, but the average network latency is better than the spike try to return to the average delay of the network.
+
 #### 6. `src/common/mod.rs`
 **Purpose**: Common module root for shared functionality between simulation and analyzer.
 
