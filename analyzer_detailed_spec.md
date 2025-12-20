@@ -146,14 +146,16 @@ pub async fn analyzer_task(
 2. Initialize UI with node positions and effective distances
 3. Open log file with appropriate mode
 4. Main loop:
-   - Read next log line
-   - Parse timestamp and event
-   - Synchronize timing:
-     - Set first timestamp as reference
-     - Calculate delay between log timestamp and reference + elapsed
-     - Wait if log is ahead; process immediately if behind (reset reference)
-   - Dispatch events to UI via `UIRefreshQueue`
-   - Handle `UICommand` messages (e.g., `RequestNodeInfo`, `SeekAnalyzer`)
+   - Read next log line and concurrently wait for UICommands (use select)
+     - If UICommand arrived handle it and start next iteration
+     - If new log line arrives check the timestamp
+       - If it is the first log line save it and process it
+       - If it is not the first log line check the spent time between processing the last message and now.
+         - If it is greater than the difference of the timestamps of the last log line and the new log line (log_line_difference) process the line. Dispatch events to UI via `UIRefreshQueue`
+         - Calculate the average difference between the log line processing real time and the log line timestamp for the last 100 log lines (average100). If average100 is smaller the difference between the last log line's processing time-last logline's timestamp log_line_difference should be multiplied by 0.9
+         - Wait for the remaining difference and concurrently for UICommandes (use select)
+         - If UICommand arrived handle it and start next iteration (in inner loop)
+         - If the time passed process the log line, dispatch events to UI via `UIRefreshQueue` and do the next iteration of the mainloop
    - In LogVisualization: Show "Visualization ended" alert on EOF
 5. Track packet history per node for `RequestNodeInfo` responses
 6. Update `last_processed_timestamp` for delay calculation in real-time mode
