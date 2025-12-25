@@ -3,18 +3,20 @@
 //! Runs on the Embassy executor and coordinates:
 //! - Scene loading and UI initialization
 //! - Log file reading with mode-appropriate behavior
-//! - Time-synchronized event dispatching
+//! - Time-synchronized event dispatching with adaptive delay recovery
 //! - UI command handling
 //!
-//! Uses `select3` to simultaneously wait for:
-//! 1. Log file lines (with polling)
-//! 2. UI commands
-//! 3. Time synchronization deadlines
+//! The main loop uses a two-phase select approach:
+//! 1. Wait for log line OR UI command
+//! 2. If log line needs delay, wait for remaining time OR UI command
+//!
+//! This provides stable delay visualization while allowing the system to
+//! gradually catch up when the average network latency is better than spikes.
 
 use chrono::{DateTime, Utc};
-use embassy_futures::select::{Either3, select3};
-use embassy_time::{Duration, Instant as EmbassyInstant, Timer};
-use std::collections::HashMap;
+use embassy_futures::select::{Either, select};
+use embassy_time::{Duration, Timer};
+use std::collections::{HashMap, VecDeque};
 use std::time::Instant;
 
 use crate::common::scene::{Scene, SceneMode, load_scene};
@@ -26,18 +28,49 @@ use super::log_loader::LogLoader;
 use super::log_parser::parse_log_line;
 use super::types::{AnalyzerMode, AnalyzerState, LogEvent, NodePacketRecord};
 
-/// Pending log event awaiting time synchronization before processing.
-struct PendingEvent {
-    timestamp: DateTime<Utc>,
-    event: LogEvent,
+/// Size of the sliding window for calculating average delay.
+const DELAY_HISTORY_SIZE: usize = 100;
+
+/// Tracks the delay between log timestamp and processing time for adaptive catch-up.
+struct DelayTracker {
+    /// Recent delay samples (real_processing_time - log_timestamp) in milliseconds
+    delay_samples: VecDeque<i64>,
+}
+
+impl DelayTracker {
+    fn new() -> Self {
+        Self {
+            delay_samples: VecDeque::with_capacity(DELAY_HISTORY_SIZE),
+        }
+    }
+
+    /// Add a delay sample and return the current average.
+    fn add_sample(&mut self, delay_ms: i64) -> i64 {
+        if self.delay_samples.len() >= DELAY_HISTORY_SIZE {
+            self.delay_samples.pop_front();
+        }
+        self.delay_samples.push_back(delay_ms);
+        self.average()
+    }
+
+    /// Calculate the average delay over the last N samples.
+    fn average(&self) -> i64 {
+        if self.delay_samples.is_empty() {
+            return 0;
+        }
+        let sum: i64 = self.delay_samples.iter().sum();
+        sum / self.delay_samples.len() as i64
+    }
 }
 
 /// Main analyzer task that runs on the Embassy executor.
 ///
-/// Uses `select3` to simultaneously handle:
-/// - Reading new log lines
-/// - Processing UI commands
-/// - Time synchronization delays
+/// Uses a two-phase select approach:
+/// 1. Wait for log line OR UI command
+/// 2. If log line needs time sync delay, wait for remaining time OR UI command
+///
+/// The delay tracking system maintains stable visualization while allowing
+/// gradual catch-up when network performance is better than observed spikes.
 ///
 /// # Parameters
 ///
@@ -92,165 +125,134 @@ pub async fn analyzer_task(
     let mut state = AnalyzerState::new();
     let mut total_sent = 0u64;
     let mut total_received = 0u64;
+    let mut delay_tracker = DelayTracker::new();
 
-    // Pending event waiting for time synchronization
-    let mut pending_event: Option<PendingEvent> = None;
-    // Whether we've reached EOF (only applies to LogVisualization mode)
-    let mut eof_reached = false;
+    // Timing state
+    let mut last_log_timestamp: Option<DateTime<Utc>> = None;
+    let mut last_process_time: Option<Instant> = None;
 
-    // Main processing loop using select3
+    // Main processing loop
     loop {
-        // Calculate the deadline for the next action
-        let wait_deadline = calculate_wait_deadline(&state, &pending_event, mode);
-
-        // Use select3 to wait for: log line, UI command, or deadline
-        match select3(
-            read_next_line_if_needed(&mut log_loader, pending_event.is_some(), eof_reached),
-            ui_command_rx.receive(),
-            Timer::at(wait_deadline),
-        )
-        .await
-        {
-            Either3::First(line_result) => {
-                // New log line available
+        // Phase 1: Wait for log line OR UI command
+        match select(log_loader.next_line(), ui_command_rx.receive()).await {
+            Either::First(line_result) => {
                 match line_result {
                     Some(line) => {
                         // Parse the log line
                         if let Some((timestamp, event)) = parse_log_line(&line) {
-                            pending_event = Some(PendingEvent { timestamp, event });
+                            // Check if this is the first log line
+                            if last_log_timestamp.is_none() {
+                                // First log line - process immediately and establish reference
+                                last_log_timestamp = Some(timestamp);
+                                last_process_time = Some(Instant::now());
+
+                                process_event(
+                                    &event,
+                                    timestamp,
+                                    &mut state,
+                                    &ui_refresh_tx,
+                                    &mut total_sent,
+                                    &mut total_received,
+                                    &node_effective_distances,
+                                )
+                                .await;
+
+                                state.last_processed_timestamp = Some(timestamp);
+                            } else {
+                                // Not the first log line - apply time synchronization
+                                let prev_ts = last_log_timestamp.unwrap();
+                                let prev_process = last_process_time.unwrap();
+
+                                // Calculate time difference between log lines
+                                let log_line_diff = timestamp.signed_duration_since(prev_ts);
+                                let mut log_line_diff_ms = log_line_diff.num_milliseconds().max(0);
+
+                                // Calculate time spent since we processed the last message
+                                let real_elapsed = prev_process.elapsed();
+                                let real_elapsed_ms = real_elapsed.as_millis() as i64;
+
+                                // Calculate current delay (how far we are behind the log timeline)
+                                let current_delay = real_elapsed_ms - log_line_diff_ms;
+                                let average_delay = delay_tracker.add_sample(current_delay);
+
+                                // Adaptive catch-up: if average delay is less than current delay,
+                                // speed up by multiplying wait time by 0.9
+                                if average_delay < current_delay && log_line_diff_ms > 0 {
+                                    log_line_diff_ms = (log_line_diff_ms * 9) / 10;
+                                }
+
+                                // Calculate remaining wait time
+                                let remaining_wait_ms = log_line_diff_ms - real_elapsed_ms;
+
+                                if remaining_wait_ms > 0 && mode == AnalyzerMode::LogVisualization {
+                                    // Phase 2: Wait for remaining time OR UI command
+                                    let wait_duration = Duration::from_millis(remaining_wait_ms as u64);
+                                    match select(Timer::after(wait_duration), ui_command_rx.receive()).await {
+                                        Either::First(_) => {
+                                            // Timer expired - process the event
+                                            last_log_timestamp = Some(timestamp);
+                                            last_process_time = Some(Instant::now());
+
+                                            process_event(
+                                                &event,
+                                                timestamp,
+                                                &mut state,
+                                                &ui_refresh_tx,
+                                                &mut total_sent,
+                                                &mut total_received,
+                                                &node_effective_distances,
+                                            )
+                                            .await;
+
+                                            state.last_processed_timestamp = Some(timestamp);
+                                        }
+                                        Either::Second(cmd) => {
+                                            // UI command arrived during wait - handle it
+                                            // The event is lost in this case (spec says start next iteration)
+                                            handle_ui_command(cmd, &state, &ui_refresh_tx);
+                                            continue;
+                                        }
+                                    }
+                                } else {
+                                    // No wait needed or in real-time mode - process immediately
+                                    last_log_timestamp = Some(timestamp);
+                                    last_process_time = Some(Instant::now());
+
+                                    process_event(
+                                        &event,
+                                        timestamp,
+                                        &mut state,
+                                        &ui_refresh_tx,
+                                        &mut total_sent,
+                                        &mut total_received,
+                                        &node_effective_distances,
+                                    )
+                                    .await;
+
+                                    state.last_processed_timestamp = Some(timestamp);
+                                }
+                            }
                         }
                         // If parsing fails, continue to next iteration
                     }
                     None => {
                         // EOF reached in log visualization mode
-                        eof_reached = true;
-                        if pending_event.is_none() {
-                            let _ = ui_refresh_tx.send(UIRefreshState::VisualizationEnded).await;
-                            log::info!("Log visualization ended (EOF reached)");
+                        let _ = ui_refresh_tx.send(UIRefreshState::VisualizationEnded).await;
+                        log::info!("Log visualization ended (EOF reached)");
+
+                        // After EOF, just keep responding to UI commands
+                        loop {
+                            let cmd = ui_command_rx.receive().await;
+                            handle_ui_command(cmd, &state, &ui_refresh_tx);
                         }
                     }
                 }
             }
-            Either3::Second(cmd) => {
-                // UI command received
+            Either::Second(cmd) => {
+                // UI command received - handle it and continue to next iteration
                 handle_ui_command(cmd, &state, &ui_refresh_tx);
             }
-            Either3::Third(_) => {
-                // Deadline reached - process pending event if ready
-                if let Some(ref pending) = pending_event {
-                    if is_event_ready_to_process(&state, pending.timestamp, mode) {
-                        let event = pending_event.take().unwrap();
-
-                        // Update timing reference on first event
-                        if state.reference_timestamp.is_none() {
-                            state.reference_timestamp = Some(event.timestamp);
-                            state.reference_instant = Some(Instant::now());
-                        }
-
-                        // Process the event
-                        process_event(
-                            &event.event,
-                            event.timestamp,
-                            &mut state,
-                            &ui_refresh_tx,
-                            &mut total_sent,
-                            &mut total_received,
-                            &node_effective_distances,
-                        )
-                        .await;
-
-                        state.last_processed_timestamp = Some(event.timestamp);
-                    }
-                } else if eof_reached {
-                    // No pending event and EOF - just keep responding to UI commands
-                }
-            }
         }
-    }
-}
-
-/// Calculate the deadline for the next action in the select loop.
-///
-/// Returns the earliest time we should wake up to either:
-/// - Process a pending event (after time sync delay)
-/// - Poll for new log lines
-/// - Keep UI responsive
-fn calculate_wait_deadline(state: &AnalyzerState, pending_event: &Option<PendingEvent>, mode: AnalyzerMode) -> EmbassyInstant {
-    // Default: wake up every 50ms to stay responsive
-    let default_deadline = EmbassyInstant::now() + Duration::from_millis(50);
-
-    if let Some(pending) = pending_event {
-        match (state.reference_timestamp, state.reference_instant) {
-            (Some(ref_ts), Some(ref_instant)) => {
-                let log_offset = pending.timestamp.signed_duration_since(ref_ts);
-                let log_offset_duration = log_offset.to_std().unwrap_or(std::time::Duration::ZERO);
-
-                // When should this event be processed in real time?
-                let target_real_time = ref_instant + log_offset_duration;
-                let now = Instant::now();
-
-                if target_real_time > now && mode == AnalyzerMode::LogVisualization {
-                    // Calculate embassy instant for the target time
-                    let wait_duration = target_real_time - now;
-                    // Cap wait time to 10 seconds to prevent very long waits
-                    let capped_wait = wait_duration.min(std::time::Duration::from_secs(10));
-                    EmbassyInstant::now() + Duration::from_micros(capped_wait.as_micros() as u64)
-                } else {
-                    // Event is ready to process now
-                    EmbassyInstant::now()
-                }
-            }
-            _ => {
-                // No reference yet - process immediately to establish reference
-                EmbassyInstant::now()
-            }
-        }
-    } else {
-        default_deadline
-    }
-}
-
-/// Check if a pending event is ready to be processed based on time synchronization.
-fn is_event_ready_to_process(state: &AnalyzerState, timestamp: DateTime<Utc>, mode: AnalyzerMode) -> bool {
-    match (state.reference_timestamp, state.reference_instant) {
-        (None, _) | (_, None) => {
-            // No reference yet - always ready (will establish reference)
-            true
-        }
-        (Some(ref_ts), Some(ref_instant)) => {
-            let elapsed = ref_instant.elapsed();
-            let log_offset = timestamp.signed_duration_since(ref_ts);
-            let log_offset_duration = log_offset.to_std().unwrap_or(std::time::Duration::ZERO);
-
-            if mode == AnalyzerMode::RealtimeTracking {
-                // In real-time mode, always process immediately
-                true
-            } else if log_offset_duration <= elapsed {
-                // Log is behind or at real time - process now
-                true
-            } else if elapsed + std::time::Duration::from_secs(3600) < log_offset_duration {
-                // Log is more than 1 hour ahead - reset reference and process
-                log::warn!("Log timestamp significantly ahead, will reset reference");
-                true
-            } else {
-                // Log is ahead - not ready yet
-                false
-            }
-        }
-    }
-}
-
-/// Read the next line from the log loader, but only if we need one.
-///
-/// If we already have a pending event or EOF is reached, this returns
-/// `core::future::pending()` equivalent behavior via immediate None or waiting.
-async fn read_next_line_if_needed(log_loader: &mut LogLoader, has_pending: bool, eof_reached: bool) -> Option<String> {
-    if has_pending || eof_reached {
-        // Don't read new lines while we have one pending or EOF reached
-        // Return a future that never completes (will be preempted by other branches)
-        core::future::pending().await
-    } else {
-        log_loader.next_line().await
     }
 }
 
