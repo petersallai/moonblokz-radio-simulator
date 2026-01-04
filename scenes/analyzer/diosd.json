@@ -1,7 +1,8 @@
 {
   "nodes": [
-    {"node_id": 3094, "position": {"y": 47.39910309690799, "x": 18.944571384188297}, "effective_distance": 1000},
-    {"node_id": 7338, "position": {"y": 47.39867465757536, "x": 18.933823122072507}, "effective_distance": 1000},
+    {"node_id": 3094, "position": {"y": 47.39910309690799, "x": 18.943571384188297}, "effective_distance": 1000},
+    {"node_id": 1792, "position": {"y": 47.39910309690799, "x": 18.944571384188297}, "effective_distance": 1000},
+    {"node_id": 7338, "position": {"y": 47.39910309690799, "x": 18.942571384188297}, "effective_distance": 1000},
     {"node_id": 3, "position": {"y": 47.40948576736744, "x": 18.927653371592204}, "effective_distance": 1000},
     {"node_id": 4, "position": {"y": 47.41433171718669, "x": 18.92776999496779}, "effective_distance": 1000},
     {"node_id": 5, "position": {"y": 47.410858104830666, "x": 18.92912515729761}, "effective_distance": 1000},
