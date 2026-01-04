@@ -412,6 +412,7 @@ fn build_node_info(node_id: u32, state: &AnalyzerState) -> NodeInfo {
                 match &record.event {
                     LogEvent::SendPacket {
                         message_type,
+                        sequence,
                         packet_index,
                         packet_count,
                         length,
@@ -425,10 +426,12 @@ fn build_node_info(node_id: u32, state: &AnalyzerState) -> NodeInfo {
                         sender_node: node_id, // Self-sent
                         link_quality: 0,
                         collision: false,
+                        sequence: *sequence,
                     }),
                     LogEvent::ReceivePacket {
                         sender_id,
                         message_type,
+                        sequence,
                         packet_index,
                         packet_count,
                         length,
@@ -443,6 +446,7 @@ fn build_node_info(node_id: u32, state: &AnalyzerState) -> NodeInfo {
                         sender_node: *sender_id,
                         link_quality: *link_quality,
                         collision: false,
+                        sequence: *sequence,
                     }),
                     _ => None, // Skip other event types
                 }

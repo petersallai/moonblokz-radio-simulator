@@ -94,6 +94,8 @@ pub struct NodeMessage {
     pub link_quality: u8,
     /// Whether this event represents a detected collision.
     pub collision: bool,
+    /// Sequence number for AddBlock and RequestBlockPart messages.
+    pub sequence: Option<u32>,
 }
 
 #[derive(Clone)]

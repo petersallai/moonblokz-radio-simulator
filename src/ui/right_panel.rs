@@ -44,7 +44,7 @@ use std::cmp::max;
 /// * `ctx` - egui context
 /// * `state` - Mutable application state
 pub fn render(ctx: &egui::Context, state: &mut AppState) {
-    egui::SidePanel::right("inspector_right").exact_width(400.0).show(ctx, |ui| {
+    egui::SidePanel::right("inspector_right").exact_width(500.0).show(ctx, |ui| {
         // Top content (default top-down, left-aligned)
         ui.heading("Inspector");
         ui.separator();
@@ -203,6 +203,7 @@ fn render_message_table(ui: &mut egui::Ui, state: &AppState, node_info: &crate::
         .column(Column::initial(60.0).at_least(40.0)) // Timestamp
         .column(Column::initial(50.0).at_least(40.0)) // From
         .column(Column::remainder()) // Type
+        .column(Column::initial(60.0).at_least(40.0)) // Sequence
         .column(Column::initial(50.0).at_least(40.0)) // Packet
         .column(Column::initial(50.0).at_least(40.0)) // Size
         .column(Column::initial(50.0).at_least(40.0)) // Link Quality
@@ -215,6 +216,9 @@ fn render_message_table(ui: &mut egui::Ui, state: &AppState, node_info: &crate::
             });
             header.col(|ui| {
                 ui.strong("Type");
+            });
+            header.col(|ui| {
+                ui.strong("Sequence");
             });
             header.col(|ui| {
                 ui.strong("Packet");
@@ -300,6 +304,17 @@ fn render_message_table(ui: &mut egui::Ui, state: &AppState, node_info: &crate::
                         ui.painter().rect_filled(rect, 0.0, fill);
                     }
                     ui.colored_label(message_type_color, type_string);
+                });
+                row.col(|ui| {
+                    if let Some(fill) = collision_fill {
+                        let rect = ui.available_rect_before_wrap();
+                        ui.painter().rect_filled(rect, 0.0, fill);
+                    }
+                    let sequence_string = match msg.sequence {
+                        Some(seq) => format!("{}", seq),
+                        None => "-".to_string(),
+                    };
+                    ui.colored_label(row_color, sequence_string);
                 });
                 row.col(|ui| {
                     if let Some(fill) = collision_fill {

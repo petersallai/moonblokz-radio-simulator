@@ -420,10 +420,16 @@ async fn handle_radio_transfer(
     total_collision: u64,
 ) {
     // Handle special message types for UI
-    if packet.message_type() == MessageType::AddBlock as u8 {
-        let sequence = u32::from_le_bytes([packet.data[5], packet.data[6], packet.data[7], packet.data[8]]);
-        _ = ui_refresh_tx.try_send(UIRefreshState::SendMessageInSimulation(sequence)).ok();
-    }
+    let sequence: Option<u32> = if packet.message_type() == MessageType::AddBlock as u8 {
+        let seq = u32::from_le_bytes([packet.data[5], packet.data[6], packet.data[7], packet.data[8]]);
+        _ = ui_refresh_tx.try_send(UIRefreshState::SendMessageInSimulation(seq)).ok();
+        Some(seq)
+    } else if packet.message_type() == MessageType::RequestBlockPart as u8 {
+        // For RequestBlockPart, sequence is at the same offset as AddBlock
+        Some(u32::from_le_bytes([packet.data[5], packet.data[6], packet.data[7], packet.data[8]]))
+    } else {
+        None
+    };
 
     let (node_position, node_radio_strength, node_effective_distance) = {
         let node = match nodes_map.get_mut(&node_id) {
@@ -440,6 +446,7 @@ async fn handle_radio_transfer(
             link_quality: 63,
             packet_count: packet.total_packet_count(),
             collision: false,
+            sequence,
         });
 
         // Enqueue the transmitter's own airtime window for collision modeling.
@@ -702,6 +709,26 @@ async fn process_packet_reception(
 
     let packet = &node.airtime_waiting_packets[packet_index];
 
+    // Extract sequence for AddBlock and RequestBlockPart messages
+    let sequence: Option<u32> = if packet.packet.message_type() == MessageType::AddBlock as u8 {
+        Some(u32::from_le_bytes([
+            packet.packet.data[5],
+            packet.packet.data[6],
+            packet.packet.data[7],
+            packet.packet.data[8],
+        ]))
+    } else if packet.packet.message_type() == MessageType::RequestBlockPart as u8 {
+        // For RequestBlockPart, sequence is at the same offset as AddBlock
+        Some(u32::from_le_bytes([
+            packet.packet.data[5],
+            packet.packet.data[6],
+            packet.packet.data[7],
+            packet.packet.data[8],
+        ]))
+    } else {
+        None
+    };
+
     // Successful reception
     if sinr >= snr_limit && !destructive_collision {
         if let Some(sender) = &node.node_input_queue_sender {
@@ -724,6 +751,7 @@ async fn process_packet_reception(
             packet_count: packet.packet.total_packet_count(),
             collision: false,
             link_quality,
+            sequence,
         });
 
         ui_refresh_tx
@@ -746,6 +774,7 @@ async fn process_packet_reception(
             packet_count: packet.packet.total_packet_count(),
             collision: true,
             link_quality,
+            sequence,
         });
 
         ui_refresh_tx
