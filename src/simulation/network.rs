@@ -9,7 +9,7 @@
 //! 4) Adjust simulation speed if auto-speed is enabled based on observed delay.
 
 use anyhow::Context;
-use core::time;
+
 use embassy_executor::Spawner;
 use embassy_futures::select::{Either3, select3};
 use embassy_time::{Duration, Instant, Timer};
@@ -23,11 +23,12 @@ use crate::{
 };
 
 use super::geometry::{distance_from_d2, distance2, is_intersect};
+use super::log_capture::drain_captured_logs;
 use super::node_task::node_task;
 use super::signal_calculations::{calculate_air_time, calculate_effective_distance, calculate_rssi, calculate_snr_limit, dbm_to_mw, get_cad_time, mw_to_dbm};
 use super::types::{
-    AirtimeWaitingPacket, CAPTURE_THRESHOLD, CadItem, NODE_MESSAGES_CAPACITY, Node, NodeInputMessage, NodeInputQueue, NodeMessage, NodeOutputMessage,
-    NodeOutputPayload, NodesOutputQueue, Point, Scene,
+    AirtimeWaitingPacket, CAPTURE_THRESHOLD, CadItem, FullMessage, LogLine, NODE_FULL_MESSAGES_CAPACITY, NODE_MESSAGES_CAPACITY, Node, NodeInputMessage,
+    NodeInputQueue, NodeMessage, NodeOutputMessage, NodeOutputPayload, NodesOutputQueue, Point, Scene,
 };
 
 /// Wait for a configuration file path from UI commands.
@@ -341,8 +342,11 @@ fn initialize_nodes(spawner: &Spawner, scene: &Scene, nodes_output_channel: &'st
         new_node.cached_effective_distance = calculate_effective_distance(new_node.radio_strength as f32, &scene.lora_parameters, &scene.path_loss_parameters);
 
         // Ensure runtime-only fields are initialized
-        if new_node.node_messages.is_empty() {
-            new_node.node_messages = VecDeque::with_capacity(NODE_MESSAGES_CAPACITY.min(64));
+        if new_node.node_radio_packets.is_empty() {
+            new_node.node_radio_packets = VecDeque::with_capacity(NODE_MESSAGES_CAPACITY.min(64));
+        }
+        if new_node.full_messages.is_empty() {
+            new_node.full_messages = VecDeque::with_capacity(NODE_FULL_MESSAGES_CAPACITY.min(64));
         }
         nodes_map.insert(new_node.node_id, new_node);
     }
@@ -437,7 +441,7 @@ async fn handle_radio_transfer(
             None => return,
         };
 
-        node.push_message(NodeMessage {
+        node.push_radio_packet(NodeMessage {
             timestamp: Instant::now(),
             message_type: packet.message_type(),
             sender_node: node_id,
@@ -742,7 +746,7 @@ async fn process_packet_reception(
 
         *total_received_packets += 1;
 
-        node.push_message(NodeMessage {
+        node.push_radio_packet(NodeMessage {
             timestamp: Instant::now(),
             message_type: packet.packet.message_type(),
             sender_node: packet.sender_node_id,
@@ -765,7 +769,7 @@ async fn process_packet_reception(
         // Collision detected
         *total_collision += 1;
 
-        node.push_message(NodeMessage {
+        node.push_radio_packet(NodeMessage {
             timestamp: Instant::now(),
             message_type: packet.packet.message_type(),
             sender_node: packet.sender_node_id,
@@ -850,6 +854,20 @@ fn adjust_auto_speed(
     }
 }
 
+/// Distribute captured logs from moonblokz_radio_lib to corresponding nodes.
+/// Logs are parsed for node_id prefix ([N]) and routed to the appropriate node's log buffer.
+fn distribute_captured_logs(nodes_map: &mut std::collections::HashMap<u32, Node>) {
+    for entry in drain_captured_logs() {
+        if let Some(node) = nodes_map.get_mut(&entry.node_id) {
+            node.push_log_line(LogLine {
+                timestamp: entry.timestamp,
+                content: entry.content,
+                level: entry.level,
+            });
+        }
+    }
+}
+
 /// Central network task driving the simulation timeline and UI updates.
 ///
 /// High-level flow each loop tick:
@@ -930,6 +948,40 @@ pub async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshQueueSender,
                 NodeOutputPayload::MessageReceived(_message) => {
                     // TODO: handle message receipt UI/state if needed
                 }
+                NodeOutputPayload::FullMessageReceived {
+                    message_type,
+                    sender_node,
+                    sequence,
+                    length,
+                } => {
+                    if let Some(node) = nodes_map.get_mut(&node_id) {
+                        node.push_full_message(FullMessage {
+                            timestamp: Instant::now(),
+                            message_type,
+                            sender_node,
+                            sequence,
+                            length,
+                            is_outgoing: false,
+                        });
+                    }
+                }
+                NodeOutputPayload::FullMessageSent {
+                    message_type,
+                    sender_node,
+                    sequence,
+                    length,
+                } => {
+                    if let Some(node) = nodes_map.get_mut(&node_id) {
+                        node.push_full_message(FullMessage {
+                            timestamp: Instant::now(),
+                            message_type,
+                            sender_node,
+                            sequence,
+                            length,
+                            is_outgoing: true,
+                        });
+                    }
+                }
                 NodeOutputPayload::RequestCAD => {
                     if let Some(node) = nodes_map.get_mut(&node_id) {
                         node.cad_waiting_list.push(CadItem {
@@ -950,7 +1002,9 @@ pub async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshQueueSender,
                     if let Some(node) = nodes_map.get(&node_id) {
                         let _ = ui_refresh_tx.try_send(UIRefreshState::NodeInfo(NodeInfo {
                             node_id: node.node_id,
-                            messages: node.node_messages.iter().cloned().collect(),
+                            radio_packets: node.node_radio_packets.iter().cloned().collect(),
+                            messages: node.full_messages.iter().cloned().collect(),
+                            log_lines: node.log_lines.iter().cloned().collect(),
                         }));
                     }
                 }
@@ -997,6 +1051,9 @@ pub async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshQueueSender,
                         adjust_auto_speed(time_delay, &mut upcounter, auto_speed_min_percent, auto_speed_max_percent, &ui_refresh_tx);
                     }
                 }
+
+                // Distribute captured logs from moonblokz_radio_lib to nodes
+                distribute_captured_logs(&mut nodes_map);
 
                 // Only run event processing when the actual event deadline was reached
                 if event_reached {

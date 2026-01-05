@@ -20,12 +20,12 @@ use std::collections::{HashMap, VecDeque};
 use std::time::Instant;
 
 use crate::common::scene::{Scene, SceneMode, load_scene};
-use crate::simulation::types::NodeMessage;
+use crate::simulation::types::{FullMessage, LogLine, NodeMessage};
 use crate::ui::{NodeInfo, NodeUIState, UICommand, UIRefreshState};
 use crate::{UICommandQueueReceiver, UIRefreshQueueSender};
 
 use super::log_loader::LogLoader;
-use super::log_parser::parse_log_line;
+use super::log_parser::{parse_log_line, parse_raw_log_line};
 use super::types::{AnalyzerMode, AnalyzerState, LogEvent, NodePacketRecord};
 
 /// Size of the sliding window for calculating average delay.
@@ -138,7 +138,13 @@ pub async fn analyzer_task(
             Either::First(line_result) => {
                 match line_result {
                     Some(line) => {
-                        // Parse the log line
+                        // First, try to capture the raw log line for Log Stream tab
+                        // This captures ALL log lines with a [node_id] pattern
+                        if let Some((node_id, raw_log)) = parse_raw_log_line(&line) {
+                            state.add_log_line(node_id, raw_log);
+                        }
+
+                        // Then, parse for structured events (Radio Stream tab)
                         if let Some((timestamp, event)) = parse_log_line(&line) {
                             // Check if this is the first log line
                             if last_log_timestamp.is_none() {
@@ -377,6 +383,35 @@ async fn process_event(
                 }
             }
         }
+        LogEvent::AddBlockReceived { node_id, sender_id, sequence, length } => {
+            // AddBlock fully received - check if part of active measurement
+            if let Some(active_id) = state.active_measurement_id {
+                if active_id == *sequence {
+                    let _ = ui_refresh_tx.try_send(UIRefreshState::NodeReachedInMeasurement(*node_id, *sequence)).ok();
+                }
+            }
+
+            // Store as FullMessage for Message Stream tab
+            state.add_full_message(*node_id, FullMessage {
+                timestamp: convert_to_embassy_instant(timestamp),
+                message_type: 6, // AddBlock
+                sender_node: *sender_id,
+                sequence: *sequence,
+                length: *length,
+                is_outgoing: false, // Received
+            });
+        }
+        LogEvent::AddBlockSent { node_id, sender_id, sequence, length } => {
+            // Store as FullMessage for Message Stream tab
+            state.add_full_message(*node_id, FullMessage {
+                timestamp: convert_to_embassy_instant(timestamp),
+                message_type: 6, // AddBlock
+                sender_node: *sender_id,
+                sequence: *sequence,
+                length: *length,
+                is_outgoing: true, // Sent
+            });
+        }
         LogEvent::Position { x, y } => {
             log::debug!("Position event: ({}, {})", x, y);
             // Position updates could be handled here if needed
@@ -402,6 +437,8 @@ async fn process_event(
 /// A `NodeInfo` struct with the node's message history.
 fn build_node_info(node_id: u32, state: &AnalyzerState) -> NodeInfo {
     log::info!("Building NodeInfo for node {}", node_id);
+    
+    // Build radio packets from packet history
     let messages = if let Some(history) = state.node_packet_histories.get(&node_id) {
         history
             .iter()
@@ -456,7 +493,33 @@ fn build_node_info(node_id: u32, state: &AnalyzerState) -> NodeInfo {
         Vec::new()
     };
 
-    NodeInfo { node_id, messages }
+    // Build log lines from raw log history
+    let log_lines = if let Some(history) = state.node_log_histories.get(&node_id) {
+        history
+            .iter()
+            .map(|raw_log| LogLine {
+                timestamp: convert_to_embassy_instant(raw_log.timestamp),
+                content: raw_log.content.clone(),
+                level: raw_log.level,
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    // Build full messages from TM6/TM7 event history
+    let full_messages = if let Some(history) = state.node_full_messages.get(&node_id) {
+        history.iter().cloned().collect()
+    } else {
+        Vec::new()
+    };
+
+    NodeInfo {
+        node_id,
+        radio_packets: messages,
+        messages: full_messages,
+        log_lines,
+    }
 }
 
 /// Convert a DateTime<Utc> timestamp to an embassy_time::Instant.

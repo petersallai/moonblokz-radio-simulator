@@ -23,6 +23,8 @@
 //! - Yellow: Medium quality
 //! - Green: Excellent quality (≥ excellent_limit)
 
+use crate::simulation::types::LogLevel;
+use crate::ui::app_state::InspectorTab;
 use crate::ui::{AppState, OperatingMode, UICommand, color_for_message_type};
 use chrono::{Local, TimeZone};
 use eframe::egui;
@@ -71,7 +73,7 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
             let mut received_messages_count = 0;
 
             if let Some(node_info) = &state.node_info {
-                for msg in &node_info.messages {
+                for msg in &node_info.radio_packets {
                     if msg.sender_node == p.node_id {
                         sent_messages_count += 1;
                     } else {
@@ -89,10 +91,14 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
                 ui.label(egui::RichText::new(format!("{}", received_messages_count)).strong());
             });
 
-            // Messages header (outside of bottom-up so it doesn't steal table space)
-            if let Some(node_info) = &state.node_info {
+            // Tab bar header (outside of bottom-up so it doesn't steal table space)
+            if let Some(_node_info) = &state.node_info {
                 ui.separator();
-                ui.heading(format!("Radio stream for #{}", node_info.node_id));
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut state.inspector_tab, InspectorTab::RadioStream, "Radio Stream");
+                    ui.selectable_value(&mut state.inspector_tab, InspectorTab::MessageStream, "Message Stream");
+                    ui.selectable_value(&mut state.inspector_tab, InspectorTab::LogStream, "Log Stream");
+                });
                 ui.add_space(4.0);
             }
 
@@ -152,7 +158,17 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
                     ui.allocate_ui_with_layout(egui::vec2(avail_w, table_h), egui::Layout::top_down(egui::Align::LEFT), |ui| {
                         if let Some(node_info) = &state.node_info {
                             if node_info.node_id == node_id {
-                                render_message_table(ui, state, node_info, table_h);
+                                match state.inspector_tab {
+                                    InspectorTab::RadioStream => {
+                                        render_radio_stream_table(ui, state, node_info, table_h);
+                                    }
+                                    InspectorTab::MessageStream => {
+                                        render_message_stream_table(ui, state, node_info, table_h);
+                                    }
+                                    InspectorTab::LogStream => {
+                                        render_log_stream(ui, state, node_info, table_h);
+                                    }
+                                }
                             }
                         }
                     });
@@ -167,7 +183,7 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
     });
 }
 
-/// Render the virtualized message table for the selected node.
+/// Render the virtualized radio stream table for the selected node.
 ///
 /// Uses `egui_extras::TableBuilder` to efficiently render only visible rows.
 /// Messages are shown newest-first (reversed order) with columns for:
@@ -186,7 +202,7 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
 /// * `state` - Application state (for thresholds)
 /// * `node_info` - The selected node's detailed information
 /// * `table_h` - Available height for the table body
-fn render_message_table(ui: &mut egui::Ui, state: &AppState, node_info: &crate::ui::NodeInfo, table_h: f32) {
+fn render_radio_stream_table(ui: &mut egui::Ui, state: &AppState, node_info: &crate::ui::NodeInfo, table_h: f32) {
     use egui_extras::{Column, TableBuilder};
 
     let row_height = ui.text_style_height(&egui::TextStyle::Body) * 1.3;
@@ -232,12 +248,12 @@ fn render_message_table(ui: &mut egui::Ui, state: &AppState, node_info: &crate::
         })
         .body(|body| {
             // Virtualized rows: only build visible rows; keep newest-first order
-            let row_count = node_info.messages.len();
+            let row_count = node_info.radio_packets.len();
             body.rows(row_height, row_count, |mut row| {
                 // Map visible row index to reversed (newest-first) index
                 let row_index = row.index();
                 let msg_idx = row_count - 1 - row_index;
-                let msg = &node_info.messages[msg_idx];
+                let msg = &node_info.radio_packets[msg_idx];
 
                 // Color rows red if from this node, else green
                 let is_self = node_info.node_id == msg.sender_node;
@@ -351,6 +367,174 @@ fn render_message_table(ui: &mut egui::Ui, state: &AppState, node_info: &crate::
                     }
 
                     ui.colored_label(link_quality_color, link_quality_string);
+                });
+            });
+        });
+}
+
+/// Render the message stream table showing complete messages (e.g., AddBlock).
+///
+/// Shows full messages (not individual packets) with columns for:
+/// - Time: Virtual simulation time or HH:MM:SS
+/// - From: "Sent" for outgoing, "#ID" for incoming
+/// - Type: Message type name
+/// - Sequence: Message sequence number
+///
+/// # Parameters
+///
+/// * `ui` - egui UI context
+/// * `state` - Application state
+/// * `node_info` - The selected node's detailed information
+/// * `table_h` - Available height for the table body
+fn render_message_stream_table(ui: &mut egui::Ui, state: &AppState, node_info: &crate::ui::NodeInfo, table_h: f32) {
+    use egui_extras::{Column, TableBuilder};
+
+    let row_height = ui.text_style_height(&egui::TextStyle::Body) * 1.3;
+    let header_h = row_height;
+    let body_min_h = (table_h - header_h).max(0.0);
+
+    TableBuilder::new(ui)
+        .striped(true)
+        .resizable(true)
+        .vscroll(true)
+        .min_scrolled_height(body_min_h)
+        .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+        .column(Column::initial(60.0).at_least(40.0)) // Time
+        .column(Column::initial(70.0).at_least(50.0)) // From
+        .column(Column::remainder()) // Type
+        .column(Column::initial(80.0).at_least(60.0)) // Sequence
+        .header(row_height, |mut header| {
+            header.col(|ui| {
+                ui.strong("Time");
+            });
+            header.col(|ui| {
+                ui.strong("From");
+            });
+            header.col(|ui| {
+                ui.strong("Type");
+            });
+            header.col(|ui| {
+                ui.strong("Sequence");
+            });
+        })
+        .body(|body| {
+            let row_count = node_info.messages.len();
+            body.rows(row_height, row_count, |mut row| {
+                let row_index = row.index();
+                let msg_idx = row_count - 1 - row_index; // Newest first
+                let msg = &node_info.messages[msg_idx];
+
+                let is_outgoing = msg.is_outgoing;
+                let row_color = if is_outgoing { Color32::YELLOW } else { Color32::LIGHT_GREEN };
+                let from_string = if is_outgoing { "Sent".to_string() } else { format!("#{}", msg.sender_node) };
+                let type_string = match msg.message_type {
+                    6 => "AddBlock",
+                    _ => "Unknown",
+                };
+
+                // Format time based on operating mode
+                let time_string = match state.operating_mode {
+                    OperatingMode::Simulation => {
+                        let secs = msg.timestamp.duration_since(state.start_time).as_secs();
+                        format!("{} s", secs)
+                    }
+                    OperatingMode::RealtimeTracking | OperatingMode::LogVisualization => {
+                        let timestamp_secs = msg.timestamp.as_secs() as i64;
+                        let local_time = Local.timestamp_opt(timestamp_secs, 0).single();
+                        match local_time {
+                            Some(dt) => dt.format("%H:%M:%S").to_string(),
+                            None => "--:--:--".to_string(),
+                        }
+                    }
+                };
+
+                row.col(|ui| {
+                    ui.colored_label(row_color, &time_string);
+                });
+                row.col(|ui| {
+                    ui.colored_label(row_color, &from_string);
+                });
+                row.col(|ui| {
+                    ui.colored_label(row_color, type_string);
+                });
+                row.col(|ui| {
+                    ui.colored_label(row_color, format!("#{}", msg.sequence));
+                });
+            });
+        });
+}
+
+/// Render the log stream showing raw log lines for the selected node.
+///
+/// Shows log lines with columns for:
+/// - Time: Timestamp of the log entry
+/// - Log: The log message content
+///
+/// Color coded by log level.
+///
+/// # Parameters
+///
+/// * `ui` - egui UI context
+/// * `state` - Application state
+/// * `node_info` - The selected node's detailed information
+/// * `table_h` - Available height for the table body
+fn render_log_stream(ui: &mut egui::Ui, state: &AppState, node_info: &crate::ui::NodeInfo, table_h: f32) {
+    use egui_extras::{Column, TableBuilder};
+
+    let row_height = ui.text_style_height(&egui::TextStyle::Body) * 1.3;
+    let header_h = row_height;
+    let body_min_h = (table_h - header_h).max(0.0);
+
+    TableBuilder::new(ui)
+        .striped(true)
+        .vscroll(true)
+        .min_scrolled_height(body_min_h)
+        .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+        .column(Column::initial(60.0).at_least(40.0)) // Time
+        .column(Column::remainder()) // Log content
+        .header(row_height, |mut header| {
+            header.col(|ui| {
+                ui.strong("Time");
+            });
+            header.col(|ui| {
+                ui.strong("Log");
+            });
+        })
+        .body(|body| {
+            let row_count = node_info.log_lines.len();
+            body.rows(row_height, row_count, |mut row| {
+                let row_index = row.index();
+                let log_idx = row_count - 1 - row_index; // Newest first
+                let log_line = &node_info.log_lines[log_idx];
+
+                let color = match log_line.level {
+                    LogLevel::Error => Color32::RED,
+                    LogLevel::Warn => Color32::YELLOW,
+                    LogLevel::Info => Color32::WHITE,
+                    LogLevel::Debug | LogLevel::Trace => Color32::GRAY,
+                };
+
+                // Format time based on operating mode
+                let time_string = match state.operating_mode {
+                    OperatingMode::Simulation => {
+                        let secs = log_line.timestamp.duration_since(state.start_time).as_secs();
+                        format!("{} s", secs)
+                    }
+                    OperatingMode::RealtimeTracking | OperatingMode::LogVisualization => {
+                        let timestamp_secs = log_line.timestamp.as_secs() as i64;
+                        let local_time = Local.timestamp_opt(timestamp_secs, 0).single();
+                        match local_time {
+                            Some(dt) => dt.format("%H:%M:%S").to_string(),
+                            None => "--:--:--".to_string(),
+                        }
+                    }
+                };
+
+                row.col(|ui| {
+                    ui.colored_label(color, &time_string);
+                });
+                row.col(|ui| {
+                    ui.colored_label(color, &log_line.content);
                 });
             });
         });

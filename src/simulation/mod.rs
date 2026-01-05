@@ -23,6 +23,7 @@
 //! the parent module.
 
 pub mod geometry;
+pub mod log_capture;
 pub mod network;
 pub mod node_task;
 pub mod signal_calculations;
@@ -33,3 +34,4 @@ pub use network::network_task;
 
 // Re-export commonly used types
 pub use types::{NodeMessage, Obstacle, Point};
+

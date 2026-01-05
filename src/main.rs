@@ -48,6 +48,7 @@ mod simulation;
 mod time_driver;
 mod ui;
 
+
 /// Capacity of the UI refresh channel (network → UI).
 /// Large enough to handle bursts of node updates without blocking the simulation.
 pub const UI_REFRESH_CHANNEL_SIZE: usize = 500;
@@ -166,12 +167,23 @@ fn load_app_icon() -> Option<egui::IconData> {
 }
 
 fn main() {
-    // Initialize logging subsystem with appropriate filter levels
-    Builder::new()
+    // Initialize log capture buffer before setting up the logger
+    simulation::log_capture::init_log_capture();
+
+    // Build the env_logger without initializing it
+    let env_logger = Builder::new()
         .filter_level(LevelFilter::Info)
         .filter(Some("moonblokz_radio_simulator"), LevelFilter::Debug)
         .filter(Some("moonblokz_radio_lib"), LevelFilter::Info)
-        .init();
+        .build();
+
+    // Wrap it in our TeeLogger that captures moonblokz_radio_lib logs
+    let tee_logger = simulation::log_capture::TeeLogger::new(env_logger);
+    let max_level = tee_logger.filter();
+
+    // Set the global logger
+    log::set_boxed_logger(Box::new(tee_logger)).expect("Failed to set logger");
+    log::set_max_level(max_level);
 
     info!("Starting up");
 

@@ -5,8 +5,11 @@
 //! - *TM2*: Packet received
 //! - *TM3*: Start measurement
 //! - *TM4*: Full message received
+//! - *TM6*: AddBlock message fully received
+//! - *TM7*: AddBlock message sent
 
-use super::types::LogEvent;
+use super::types::{LogEvent, RawLogLine};
+use crate::simulation::types::LogLevel;
 use chrono::{DateTime, Utc};
 
 /// Parse a log line and extract timestamp and event.
@@ -49,8 +52,63 @@ pub fn parse_log_line(line: &str) -> Option<(DateTime<Utc>, LogEvent)> {
         parse_tm3(line, node_id).map(|event| (timestamp, event))
     } else if line.contains("*TM4*") {
         parse_tm4(line, node_id).map(|event| (timestamp, event))
+    } else if line.contains("*TM6*") {
+        parse_tm6(line, node_id).map(|event| (timestamp, event))
+    } else if line.contains("*TM7*") {
+        parse_tm7(line, node_id).map(|event| (timestamp, event))
     } else {
         None
+    }
+}
+
+/// Parse a raw log line for the Log Stream tab.
+///
+/// Extracts timestamp, node ID, log content, and log level from any log line
+/// that has a `[node_id]` pattern. This captures all log lines, not just
+/// structured *TM* events.
+///
+/// # Parameters
+///
+/// * `line` - A single log line to parse
+///
+/// # Returns
+///
+/// `Some((node_id, raw_log_line))` if the line contains a node ID, `None` otherwise.
+pub fn parse_raw_log_line(line: &str) -> Option<(u32, RawLogLine)> {
+    let timestamp = parse_timestamp(line)?;
+    let node_id = extract_node_id(line)?;
+    
+    // Extract the content after the [node_id] bracket
+    let bracket_end = line.rfind(']')?;
+    let content = line[bracket_end + 1..].trim().to_string();
+    
+    // Determine log level from content or default to Info
+    let level = extract_log_level(line);
+    
+    Some((node_id, RawLogLine {
+        timestamp,
+        content,
+        level,
+    }))
+}
+
+/// Extract log level from a log line.
+///
+/// Looks for standard log level indicators (ERROR, WARN, INFO, DEBUG, TRACE).
+fn extract_log_level(line: &str) -> LogLevel {
+    // Check for log level markers in the line
+    let upper = line.to_uppercase();
+    if upper.contains(" ERROR ") || upper.contains("ERROR:") {
+        LogLevel::Error
+    } else if upper.contains(" WARN ") || upper.contains("WARN:") {
+        LogLevel::Warn
+    } else if upper.contains(" DEBUG ") || upper.contains("DEBUG:") {
+        LogLevel::Debug
+    } else if upper.contains(" TRACE ") || upper.contains("TRACE:") {
+        LogLevel::Trace
+    } else {
+        // Default to Info for most log lines
+        LogLevel::Info
     }
 }
 
@@ -129,6 +187,44 @@ fn parse_tm4(line: &str, node_id: u32) -> Option<LogEvent> {
         node_id,
         sender_id,
         message_type,
+        sequence,
+        length,
+    })
+}
+
+/// Parse *TM6* - AddBlock message fully received.
+///
+/// Log format:
+/// ```text
+/// *TM6* Received AddBlock message: sender: {sender_id}, sequence: {sequence}, length: {length}
+/// ```
+fn parse_tm6(line: &str, node_id: u32) -> Option<LogEvent> {
+    let sender_id = extract_field_u32(line, "sender:")?;
+    let sequence = extract_field_u32(line, "sequence:")?;
+    let length = extract_field_usize(line, "length:").unwrap_or(0);
+
+    Some(LogEvent::AddBlockReceived {
+        node_id,
+        sender_id,
+        sequence,
+        length,
+    })
+}
+
+/// Parse *TM7* - AddBlock message sent.
+///
+/// Log format:
+/// ```text
+/// *TM7* Sending AddBlock: sender: {sender_id}, sequence: {sequence}, length: {length}
+/// ```
+fn parse_tm7(line: &str, node_id: u32) -> Option<LogEvent> {
+    let sender_id = extract_field_u32(line, "sender:")?;
+    let sequence = extract_field_u32(line, "sequence:")?;
+    let length = extract_field_usize(line, "length:").unwrap_or(0);
+
+    Some(LogEvent::AddBlockSent {
+        node_id,
+        sender_id,
         sequence,
         length,
     })

@@ -125,7 +125,9 @@ pub struct CadItem {
 /// Node structure with position and radio strength
 ///
 /// Runtime-only fields are skipped from serde and initialized at scene load:
-/// - `node_messages`: bounded ring buffer to avoid unbounded memory use.
+/// - `node_radio_packets`: bounded ring buffer for radio packet history (Radio Stream tab).
+/// - `full_messages`: bounded ring buffer for full message history (Message Stream tab).
+/// - `log_lines`: bounded ring buffer for log lines (Log Stream tab).
 /// - `airtime_waiting_packets` and `cad_waiting_list`: event queues processed
 ///   by `network_task`.
 /// - `cached_effective_distance`: per-node cache to avoid recomputing the same
@@ -138,7 +140,11 @@ pub struct Node {
     #[serde(skip)]
     pub node_input_queue_sender: Option<NodeInputQueueSender>,
     #[serde(skip)]
-    pub node_messages: VecDeque<NodeMessage>,
+    pub node_radio_packets: VecDeque<NodeMessage>,
+    #[serde(skip)]
+    pub full_messages: VecDeque<FullMessage>,
+    #[serde(skip)]
+    pub log_lines: VecDeque<LogLine>,
     #[serde(skip)]
     pub airtime_waiting_packets: Vec<AirtimeWaitingPacket>,
     #[serde(skip)]
@@ -223,6 +229,20 @@ pub enum NodeOutputPayload {
     RequestCAD,
     /// A node reached during a measurement (by sequence/measurement ID).
     NodeReachedInMeasurement(u32), // measurement ID
+    /// A full message was received by the node (e.g., complete AddBlock).
+    FullMessageReceived {
+        message_type: u8,
+        sender_node: u32,
+        sequence: u32,
+        length: usize,
+    },
+    /// A full message was sent by the node (e.g., AddBlock).
+    FullMessageSent {
+        message_type: u8,
+        sender_node: u32,
+        sequence: u32,
+        length: usize,
+    },
 }
 
 /// Envelope for events emitted by node tasks into the network loop.
@@ -243,6 +263,51 @@ pub enum NodeInputMessage {
 /// Maximum message history per node (ring buffer). Bounded to keep UI/memory predictable.
 pub const NODE_MESSAGES_CAPACITY: usize = 1000;
 
+/// Maximum number of log lines to retain per node.
+pub const NODE_LOG_LINES_CAPACITY: usize = 1000;
+
+/// Maximum number of full messages to retain per node.
+pub const NODE_FULL_MESSAGES_CAPACITY: usize = 1000;
+
+/// Log level for log stream entries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogLevel {
+    Trace,
+    Debug,
+    Info,
+    Warn,
+    Error,
+}
+
+/// Represents a log line for the Log Stream tab.
+#[derive(Debug, Clone)]
+pub struct LogLine {
+    /// Timestamp of the log entry.
+    pub timestamp: Instant,
+    /// The raw log line content (without timestamp prefix).
+    pub content: String,
+    /// Log level (for color coding).
+    pub level: LogLevel,
+}
+
+/// Represents a fully assembled message (e.g., complete AddBlock).
+/// Used by the Message Stream tab.
+#[derive(Debug, Clone)]
+pub struct FullMessage {
+    /// Timestamp when the message was fully received/sent.
+    pub timestamp: Instant,
+    /// Message type (e.g., MessageType::AddBlock = 6).
+    pub message_type: u8,
+    /// Sender node ID.
+    pub sender_node: u32,
+    /// Sequence number of the message.
+    pub sequence: u32,
+    /// Total message payload length.
+    pub length: usize,
+    /// Whether this is an outgoing (sent) or incoming (received) message.
+    pub is_outgoing: bool,
+}
+
 /// Maximum number of airtime waiting packets per node before overflow warnings.
 /// This prevents unbounded growth under extreme collision or high-load scenarios.
 /// Typical values: 50-100 packets for normal operation, >200 indicates potential issues.
@@ -252,13 +317,29 @@ pub const MAX_AIRTIME_WAITING_PACKETS: usize = 500;
 const AIRTIME_CAPACITY_WARNING_THRESHOLD: f32 = 0.8; // 80%
 
 impl Node {
-    /// Push a message into this node's bounded history, popping the oldest if
+    /// Push a radio packet into this node's bounded history, popping the oldest if
     /// at capacity.
-    pub fn push_message(&mut self, msg: NodeMessage) {
-        if self.node_messages.len() >= NODE_MESSAGES_CAPACITY {
-            self.node_messages.pop_front();
+    pub fn push_radio_packet(&mut self, msg: NodeMessage) {
+        if self.node_radio_packets.len() >= NODE_MESSAGES_CAPACITY {
+            self.node_radio_packets.pop_front();
         }
-        self.node_messages.push_back(msg);
+        self.node_radio_packets.push_back(msg);
+    }
+
+    /// Push a full message into this node's bounded history.
+    pub fn push_full_message(&mut self, msg: FullMessage) {
+        if self.full_messages.len() >= NODE_FULL_MESSAGES_CAPACITY {
+            self.full_messages.pop_front();
+        }
+        self.full_messages.push_back(msg);
+    }
+
+    /// Push a log line into this node's bounded history.
+    pub fn push_log_line(&mut self, line: LogLine) {
+        if self.log_lines.len() >= NODE_LOG_LINES_CAPACITY {
+            self.log_lines.pop_front();
+        }
+        self.log_lines.push_back(line);
     }
 
     /// Push an airtime waiting packet with capacity checking and overflow warning.

@@ -90,6 +90,20 @@ impl NodeContext {
             })
             .await;
 
+        // Notify about received full message for Message Stream tab
+        let _ = self
+            .out_tx
+            .send(NodeOutputMessage {
+                node_id: self.node_id,
+                payload: NodeOutputPayload::FullMessageReceived {
+                    message_type: MessageType::AddBlock as u8,
+                    sender_node: msg.sender_node_id(),
+                    sequence,
+                    length: msg.payload().len(),
+                },
+            })
+            .await;
+
         let _ = self
             .manager
             .report_message_processing_status(moonblokz_radio_lib::MessageProcessingResult::NewBlockAdded(msg.clone()));
@@ -182,6 +196,20 @@ impl NodeContext {
                 if msg.message_type() == MessageType::AddBlock as u8 {
                     let sequence = Self::extract_sequence_from_payload(msg.payload());
                     self.arrived_messages.insert(sequence, msg.clone());
+
+                    // Notify about sent full message for Message Stream tab
+                    let _ = self
+                        .out_tx
+                        .send(NodeOutputMessage {
+                            node_id: self.node_id,
+                            payload: NodeOutputPayload::FullMessageSent {
+                                message_type: MessageType::AddBlock as u8,
+                                sender_node: self.node_id,
+                                sequence,
+                                length: msg.payload().len(),
+                            },
+                        })
+                        .await;
                 }
                 let _ = self.manager.send_message(msg);
             }

@@ -29,6 +29,7 @@ pub mod mode_selector;
 pub mod right_panel;
 pub mod top_panel;
 
+use crate::simulation::types::{FullMessage, LogLine};
 use crate::simulation::{NodeMessage, Point};
 
 pub use app_state::{AppState, color_for_message_type};
@@ -53,8 +54,12 @@ pub enum OperatingMode {
 pub struct NodeInfo {
     /// Unique identifier of the node.
     pub node_id: u32,
-    /// Complete message history for this node (both sent and received).
-    pub messages: Vec<NodeMessage>,
+    /// Radio packet history for this node (both sent and received) - Radio Stream tab.
+    pub radio_packets: Vec<NodeMessage>,
+    /// Full message history (e.g., complete AddBlock messages) - Message Stream tab.
+    pub messages: Vec<FullMessage>,
+    /// Log lines for this node - Log Stream tab.
+    pub log_lines: Vec<LogLine>,
 }
 
 /// Events pushed from the network task to update the UI state.

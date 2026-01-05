@@ -37,6 +37,15 @@ pub const NODE_RADIO_TRANSFER_INDICATOR_TIMEOUT: u64 = 1000;
 /// Duration constant as a `std::time::Duration` for easy comparison with timestamps.
 pub const NODE_RADIO_TRANSFER_INDICATOR_DURATION: Duration = Duration::from_millis(NODE_RADIO_TRANSFER_INDICATOR_TIMEOUT);
 
+/// Currently selected tab in the right panel inspector.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum InspectorTab {
+    #[default]
+    RadioStream,
+    MessageStream,
+    LogStream,
+}
+
 /// Central application state managing all UI components and simulation coordination.
 ///
 /// This struct maintains all state needed for rendering the UI and coordinates
@@ -67,6 +76,8 @@ pub struct AppState {
     pub node_radio_transfer_indicators: HashMap<u32, (Instant, u8, u32)>,
     /// Detailed info for the selected node (messages, statistics).
     pub node_info: Option<NodeInfo>,
+    /// Currently selected tab in the right panel inspector.
+    pub inspector_tab: InspectorTab,
 
     // Timing and metrics
     /// Simulation start time (virtual time, scaled by time driver).
@@ -203,6 +214,7 @@ impl AppState {
             obstacles: Vec::new(),
             node_radio_transfer_indicators: HashMap::new(),
             node_info: None,
+            inspector_tab: InspectorTab::default(),
             start_time: embassy_time::Instant::now(),
             last_node_info_update: Instant::now(),
             total_sent_packets: 0,
