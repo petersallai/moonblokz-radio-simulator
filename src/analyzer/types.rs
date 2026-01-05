@@ -38,10 +38,7 @@ pub enum LogEvent {
         link_quality: u8,
     },
     /// *TM3* - Measurement started.
-    StartMeasurement {
-        node_id: u32,
-        sequence: u32,
-    },
+    StartMeasurement { node_id: u32, sequence: u32 },
     /// *TM4* - Full message received and routed.
     ReceivedFullMessage {
         node_id: u32,
@@ -65,10 +62,7 @@ pub enum LogEvent {
         length: usize,
     },
     /// Position update for a node (for potential future use).
-    Position {
-        x: f64,
-        y: f64,
-    },
+    Position { x: f64, y: f64 },
 }
 
 /// Record of a packet for history tracking.

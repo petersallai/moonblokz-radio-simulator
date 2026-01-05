@@ -77,19 +77,15 @@ pub fn parse_log_line(line: &str) -> Option<(DateTime<Utc>, LogEvent)> {
 pub fn parse_raw_log_line(line: &str) -> Option<(u32, RawLogLine)> {
     let timestamp = parse_timestamp(line)?;
     let node_id = extract_node_id(line)?;
-    
+
     // Extract the content after the [node_id] bracket
     let bracket_end = line.rfind(']')?;
     let content = line[bracket_end + 1..].trim().to_string();
-    
+
     // Determine log level from content or default to Info
     let level = extract_log_level(line);
-    
-    Some((node_id, RawLogLine {
-        timestamp,
-        content,
-        level,
-    }))
+
+    Some((node_id, RawLogLine { timestamp, content, level }))
 }
 
 /// Extract log level from a log line.
