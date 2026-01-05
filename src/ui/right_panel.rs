@@ -311,7 +311,7 @@ fn render_message_table(ui: &mut egui::Ui, state: &AppState, node_info: &crate::
                         ui.painter().rect_filled(rect, 0.0, fill);
                     }
                     let sequence_string = match msg.sequence {
-                        Some(seq) => format!("{}", seq),
+                        Some(seq) => format!("#{}", seq),
                         None => "-".to_string(),
                     };
                     ui.colored_label(row_color, sequence_string);
