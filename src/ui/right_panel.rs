@@ -46,7 +46,11 @@ use std::cmp::max;
 /// * `ctx` - egui context
 /// * `state` - Mutable application state
 pub fn render(ctx: &egui::Context, state: &mut AppState) {
-    egui::SidePanel::right("inspector_right").exact_width(500.0).show(ctx, |ui| {
+    let panel = egui::SidePanel::right("inspector_right")
+        .min_width(400.0)
+        .default_width(state.right_panel_width)
+        .resizable(true);
+    let response = panel.show(ctx, |ui| {
         // Top content (default top-down, left-aligned)
         ui.heading("Inspector");
         ui.separator();
@@ -155,18 +159,28 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
                 // Table area above buttons: fill whatever is left
                 let table_h = ui.available_height().max(0.0);
                 if table_h > 0.0 {
+                    // Check if we have matching node_info before entering the layout
+                    let has_matching_node_info = state.node_info.as_ref().map_or(false, |ni| ni.node_id == node_id);
+                    let current_tab = state.inspector_tab;
+
                     ui.allocate_ui_with_layout(egui::vec2(avail_w, table_h), egui::Layout::top_down(egui::Align::LEFT), |ui| {
-                        if let Some(node_info) = &state.node_info {
-                            if node_info.node_id == node_id {
-                                match state.inspector_tab {
-                                    InspectorTab::RadioStream => {
-                                        render_radio_stream_table(ui, state, node_info, table_h);
+                        if has_matching_node_info {
+                            match current_tab {
+                                InspectorTab::RadioStream => {
+                                    if let Some(node_info) = &state.node_info {
+                                        render_radio_stream_table(ui, state, node_info);
                                     }
-                                    InspectorTab::MessageStream => {
-                                        render_message_stream_table(ui, state, node_info, table_h);
+                                }
+                                InspectorTab::MessageStream => {
+                                    if let Some(node_info) = &state.node_info {
+                                        render_message_stream_table(ui, state, node_info);
                                     }
-                                    InspectorTab::LogStream => {
-                                        render_log_stream(ui, state, node_info, table_h);
+                                }
+                                InspectorTab::LogStream => {
+                                    // Clone log_lines to avoid borrow conflict with mutable state
+                                    let log_lines = state.node_info.as_ref().map(|ni| ni.log_lines.clone());
+                                    if let Some(log_lines) = log_lines {
+                                        render_log_stream(ui, state, &log_lines);
                                     }
                                 }
                             }
@@ -181,6 +195,8 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
             });
         }
     });
+    // Update stored width when panel is resized
+    state.right_panel_width = response.response.rect.width();
 }
 
 /// Render the virtualized radio stream table for the selected node.
@@ -201,28 +217,23 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
 /// * `ui` - egui UI context
 /// * `state` - Application state (for thresholds)
 /// * `node_info` - The selected node's detailed information
-/// * `table_h` - Available height for the table body
-fn render_radio_stream_table(ui: &mut egui::Ui, state: &AppState, node_info: &crate::ui::NodeInfo, table_h: f32) {
+fn render_radio_stream_table(ui: &mut egui::Ui, state: &AppState, node_info: &crate::ui::NodeInfo) {
     use egui_extras::{Column, TableBuilder};
 
     let row_height = ui.text_style_height(&egui::TextStyle::Body) * 1.3;
-    // Ensure total table height (header + body) fits in the allocated space,
-    // otherwise the body would push into the buttons area by ~header height.
-    let header_h = row_height;
-    let body_min_h = (table_h - header_h).max(0.0);
     TableBuilder::new(ui)
         .striped(true)
-        .resizable(true)
         .vscroll(true)
-        .min_scrolled_height(body_min_h)
+        .min_scrolled_height(100.0)
+        .sense(egui::Sense::click())
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-        .column(Column::initial(60.0).at_least(40.0)) // Timestamp
-        .column(Column::initial(50.0).at_least(40.0)) // From
-        .column(Column::remainder()) // Type
-        .column(Column::initial(60.0).at_least(40.0)) // Sequence
-        .column(Column::initial(50.0).at_least(40.0)) // Packet
-        .column(Column::initial(50.0).at_least(40.0)) // Size
-        .column(Column::initial(50.0).at_least(40.0)) // Link Quality
+        .column(Column::exact(60.0)) // Timestamp
+        .column(Column::exact(55.0)) // From
+        .column(Column::remainder().clip(true)) // Type - clips to prevent blocking resize
+        .column(Column::exact(60.0)) // Sequence
+        .column(Column::exact(45.0)) // Packet
+        .column(Column::exact(45.0)) // Size
+        .column(Column::exact(35.0)) // Link Quality
         .header(row_height, |mut header| {
             header.col(|ui| {
                 ui.strong("Time");
@@ -385,24 +396,21 @@ fn render_radio_stream_table(ui: &mut egui::Ui, state: &AppState, node_info: &cr
 /// * `ui` - egui UI context
 /// * `state` - Application state
 /// * `node_info` - The selected node's detailed information
-/// * `table_h` - Available height for the table body
-fn render_message_stream_table(ui: &mut egui::Ui, state: &AppState, node_info: &crate::ui::NodeInfo, table_h: f32) {
+fn render_message_stream_table(ui: &mut egui::Ui, state: &AppState, node_info: &crate::ui::NodeInfo) {
     use egui_extras::{Column, TableBuilder};
 
     let row_height = ui.text_style_height(&egui::TextStyle::Body) * 1.3;
-    let header_h = row_height;
-    let body_min_h = (table_h - header_h).max(0.0);
 
     TableBuilder::new(ui)
         .striped(true)
-        .resizable(true)
         .vscroll(true)
-        .min_scrolled_height(body_min_h)
+        .min_scrolled_height(100.0)
+        .sense(egui::Sense::click())
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-        .column(Column::initial(60.0).at_least(40.0)) // Time
-        .column(Column::initial(70.0).at_least(50.0)) // From
-        .column(Column::remainder()) // Type
-        .column(Column::initial(80.0).at_least(60.0)) // Sequence
+        .column(Column::exact(60.0)) // Time
+        .column(Column::exact(70.0)) // From
+        .column(Column::remainder().clip(true)) // Type - clips to prevent blocking resize
+        .column(Column::exact(80.0)) // Sequence
         .header(row_height, |mut header| {
             header.col(|ui| {
                 ui.strong("Time");
@@ -475,23 +483,44 @@ fn render_message_stream_table(ui: &mut egui::Ui, state: &AppState, node_info: &
 /// # Parameters
 ///
 /// * `ui` - egui UI context
-/// * `state` - Application state
-/// * `node_info` - The selected node's detailed information
-/// * `table_h` - Available height for the table body
-fn render_log_stream(ui: &mut egui::Ui, state: &AppState, node_info: &crate::ui::NodeInfo, table_h: f32) {
+/// * `state` - Application state (mutable for filter input)
+/// * `log_lines` - The log lines to display
+fn render_log_stream(ui: &mut egui::Ui, state: &mut AppState, log_lines: &[crate::simulation::types::LogLine]) {
     use egui_extras::{Column, TableBuilder};
 
+    // Filter input field at the top
+    ui.horizontal(|ui| {
+        ui.label("Filter:");
+        ui.add(egui::TextEdit::singleline(&mut state.log_filter).hint_text("Type to filter logs..."));
+        if ui.button("x").clicked() {
+            state.log_filter.clear();
+        }
+    });
+    ui.add_space(4.0);
+
+    // Collect filtered log indices (matching the filter string, case-insensitive)
+    let filter_lower = state.log_filter.to_lowercase();
+    let filtered_indices: Vec<usize> = if filter_lower.is_empty() {
+        (0..log_lines.len()).collect()
+    } else {
+        log_lines
+            .iter()
+            .enumerate()
+            .filter(|(_, log)| log.content.to_lowercase().contains(&filter_lower))
+            .map(|(i, _)| i)
+            .collect()
+    };
+
     let row_height = ui.text_style_height(&egui::TextStyle::Body) * 1.3;
-    let header_h = row_height;
-    let body_min_h = (table_h - header_h).max(0.0);
 
     TableBuilder::new(ui)
         .striped(true)
         .vscroll(true)
-        .min_scrolled_height(body_min_h)
+        .min_scrolled_height(100.0)
+        .sense(egui::Sense::click())
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-        .column(Column::initial(60.0).at_least(40.0)) // Time
-        .column(Column::remainder()) // Log content
+        .column(Column::exact(60.0)) // Time
+        .column(Column::remainder().clip(true)) // Log content - clips to prevent blocking resize
         .header(row_height, |mut header| {
             header.col(|ui| {
                 ui.strong("Time");
@@ -501,11 +530,11 @@ fn render_log_stream(ui: &mut egui::Ui, state: &AppState, node_info: &crate::ui:
             });
         })
         .body(|body| {
-            let row_count = node_info.log_lines.len();
+            let row_count = filtered_indices.len();
             body.rows(row_height, row_count, |mut row| {
                 let row_index = row.index();
-                let log_idx = row_count - 1 - row_index; // Newest first
-                let log_line = &node_info.log_lines[log_idx];
+                let log_idx = filtered_indices[row_count - 1 - row_index]; // Newest first
+                let log_line = &log_lines[log_idx];
 
                 let color = match log_line.level {
                     LogLevel::Error => Color32::RED,

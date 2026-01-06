@@ -172,6 +172,10 @@ pub struct AppState {
     pub analyzer_delay: u64,
     /// Whether log visualization has reached end of file.
     pub visualization_ended: bool,
+    /// Width of the right inspector panel in pixels.
+    pub right_panel_width: f32,
+    /// Filter string for the log stream tab.
+    pub log_filter: String,
 }
 
 /// Settings persisted across application sessions.
@@ -185,6 +189,7 @@ struct PersistedSettings {
     last_open_dir_rt_log: Option<String>,
     last_open_dir_logvis_scene: Option<String>,
     last_open_dir_logvis_log: Option<String>,
+    right_panel_width: Option<f32>,
 }
 
 impl AppState {
@@ -254,6 +259,8 @@ impl AppState {
             analyzer_delay: 0,
             visualization_ended: false,
             last_simulation_time: None,
+            right_panel_width: persisted.right_panel_width.unwrap_or(500.0),
+            log_filter: String::new(),
         }
     }
 
@@ -512,6 +519,7 @@ impl eframe::App for AppState {
             last_open_dir_rt_log: self.last_open_dir_rt_log.clone(),
             last_open_dir_logvis_scene: self.last_open_dir_logvis_scene.clone(),
             last_open_dir_logvis_log: self.last_open_dir_logvis_log.clone(),
+            right_panel_width: Some(self.right_panel_width),
         };
         eframe::set_value(storage, "app_settings", &settings);
     }

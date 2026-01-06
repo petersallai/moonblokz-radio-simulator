@@ -76,16 +76,35 @@ pub fn parse_log_line(line: &str) -> Option<(DateTime<Utc>, LogEvent)> {
 /// `Some((node_id, raw_log_line))` if the line contains a node ID, `None` otherwise.
 pub fn parse_raw_log_line(line: &str) -> Option<(u32, RawLogLine)> {
     let timestamp = parse_timestamp(line)?;
-    let node_id = extract_node_id(line)?;
+    let (node_id, bracket_end) = extract_node_id_with_position(line)?;
 
     // Extract the content after the [node_id] bracket
-    let bracket_end = line.rfind(']')?;
     let content = line[bracket_end + 1..].trim().to_string();
 
     // Determine log level from content or default to Info
     let level = extract_log_level(line);
 
     Some((node_id, RawLogLine { timestamp, content, level }))
+}
+
+/// Extract node ID and its ending position from a [xxxx] pattern in the line.
+///
+/// Finds all bracket patterns and returns the first one that parses as a valid u32,
+/// along with the position of the closing bracket.
+fn extract_node_id_with_position(line: &str) -> Option<(u32, usize)> {
+    let mut search_start = 0;
+    while let Some(start) = line[search_start..].find('[') {
+        let abs_start = search_start + start;
+        if let Some(end_offset) = line[abs_start..].find(']') {
+            let abs_end = abs_start + end_offset;
+            let id_str = &line[abs_start + 1..abs_end];
+            if let Ok(node_id) = id_str.parse::<u32>() {
+                return Some((node_id, abs_end));
+            }
+        }
+        search_start = abs_start + 1;
+    }
+    None
 }
 
 /// Extract log level from a log line.
@@ -109,22 +128,42 @@ fn extract_log_level(line: &str) -> LogLevel {
 }
 
 /// Extract timestamp from the beginning of a log line.
+///
+/// Handles multiple timestamp formats:
+/// - Short: `2025-10-23T18:00:00Z` (20 chars)
+/// - Long:  `2026-01-06T09:14:34.900912254+00:00` (35 chars with nanoseconds)
 fn parse_timestamp(line: &str) -> Option<DateTime<Utc>> {
-    // Timestamp format: 2025-10-23T18:00:00Z (20 chars)
     if line.len() < 20 {
         return None;
     }
 
-    let timestamp_str = &line[..20];
+    // Try to find the end of the timestamp by looking for common delimiters
+    // Timestamps end before `:` followed by `[` (node ID) or before a space
+    let timestamp_end = line.find(":[").or_else(|| line.find(" ")).unwrap_or(line.len().min(35));
+
+    let timestamp_str = &line[..timestamp_end];
     DateTime::parse_from_rfc3339(timestamp_str).ok().map(|dt| dt.with_timezone(&Utc))
 }
 
-/// Extract node ID from the last [xxxx] pattern in the line.
+/// Extract node ID from a [xxxx] pattern in the line.
+///
+/// Finds all bracket patterns and returns the first one that parses as a valid u32.
+/// This handles cases where the log content itself may contain brackets.
 fn extract_node_id(line: &str) -> Option<u32> {
-    let start = line.rfind('[')?;
-    let end = line[start..].find(']')? + start;
-    let id_str = &line[start + 1..end];
-    id_str.parse().ok()
+    // Find all bracket patterns and try to parse each as a node ID
+    let mut search_start = 0;
+    while let Some(start) = line[search_start..].find('[') {
+        let abs_start = search_start + start;
+        if let Some(end_offset) = line[abs_start..].find(']') {
+            let abs_end = abs_start + end_offset;
+            let id_str = &line[abs_start + 1..abs_end];
+            if let Ok(node_id) = id_str.parse::<u32>() {
+                return Some(node_id);
+            }
+        }
+        search_start = abs_start + 1;
+    }
+    None
 }
 
 /// Parse *TM1* - Packet transmitted.
