@@ -60,6 +60,20 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
                 ui.label("Selected Node:");
                 ui.label(egui::RichText::new(format!("#{}", p.node_id)).strong().color(Color32::from_rgb(0, 128, 255)));
             });
+            // Display version info if available (from TM8 messages in analyzer modes only)
+            if state.operating_mode != OperatingMode::Simulation {
+                if let Some(node_info) = &state.node_info {
+                    ui.horizontal(|ui| {
+                        ui.label("Node version:");
+                        let node_ver_str = node_info.node_version.map(|v| v.to_string()).unwrap_or_else(|| "-".to_string());
+                        ui.label(egui::RichText::new(node_ver_str).strong());
+                        ui.add_space(10.0);
+                        ui.label("Probe version:");
+                        let probe_ver_str = node_info.probe_version.map(|v| v.to_string()).unwrap_or_else(|| "-".to_string());
+                        ui.label(egui::RichText::new(probe_ver_str).strong());
+                    });
+                }
+            }
             ui.horizontal(|ui| {
                 ui.label("Position: (");
                 ui.label(egui::RichText::new(format!("{:.5}", p.position.x)).strong());

@@ -7,6 +7,7 @@
 //! - *TM4*: Full message received
 //! - *TM6*: AddBlock message fully received
 //! - *TM7*: AddBlock message sent
+//! - *TM8*: Version information
 
 use super::types::{LogEvent, RawLogLine};
 use crate::simulation::types::LogLevel;
@@ -56,6 +57,8 @@ pub fn parse_log_line(line: &str) -> Option<(DateTime<Utc>, LogEvent)> {
         parse_tm6(line, node_id).map(|event| (timestamp, event))
     } else if line.contains("*TM7*") {
         parse_tm7(line, node_id).map(|event| (timestamp, event))
+    } else if line.contains("*TM8*") {
+        parse_tm8(line, node_id).map(|event| (timestamp, event))
     } else {
         None
     }
@@ -320,6 +323,23 @@ fn extract_packet_info(line: &str) -> Option<(u8, u8)> {
     let count: u8 = remaining[slash_pos + 1..end].parse().ok()?;
 
     Some((index, count))
+}
+
+/// Parse *TM8* - Version information.
+///
+/// Log format:
+/// ```text
+/// *TM8* probe_version: 27, node_version: 5
+/// ```
+fn parse_tm8(line: &str, node_id: u32) -> Option<LogEvent> {
+    let probe_version = extract_field_u8(line, "probe_version:")?;
+    let node_version = extract_field_u8(line, "node_version:")?;
+
+    Some(LogEvent::VersionInfo {
+        node_id,
+        probe_version,
+        node_version,
+    })
 }
 
 #[cfg(test)]

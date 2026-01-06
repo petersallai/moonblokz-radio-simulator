@@ -1005,6 +1005,8 @@ pub async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshQueueSender,
                             radio_packets: node.node_radio_packets.iter().cloned().collect(),
                             messages: node.full_messages.iter().cloned().collect(),
                             log_lines: node.log_lines.iter().cloned().collect(),
+                            probe_version: None,
+                            node_version: None,
                         }));
                     }
                 }

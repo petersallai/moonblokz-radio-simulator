@@ -383,7 +383,12 @@ async fn process_event(
                 }
             }
         }
-        LogEvent::AddBlockReceived { node_id, sender_id, sequence, length } => {
+        LogEvent::AddBlockReceived {
+            node_id,
+            sender_id,
+            sequence,
+            length,
+        } => {
             // AddBlock fully received - check if part of active measurement
             if let Some(active_id) = state.active_measurement_id {
                 if active_id == *sequence {
@@ -392,29 +397,49 @@ async fn process_event(
             }
 
             // Store as FullMessage for Message Stream tab
-            state.add_full_message(*node_id, FullMessage {
-                timestamp: convert_to_embassy_instant(timestamp),
-                message_type: 6, // AddBlock
-                sender_node: *sender_id,
-                sequence: *sequence,
-                length: *length,
-                is_outgoing: false, // Received
-            });
+            state.add_full_message(
+                *node_id,
+                FullMessage {
+                    timestamp: convert_to_embassy_instant(timestamp),
+                    message_type: 6, // AddBlock
+                    sender_node: *sender_id,
+                    sequence: *sequence,
+                    length: *length,
+                    is_outgoing: false, // Received
+                },
+            );
         }
-        LogEvent::AddBlockSent { node_id, sender_id, sequence, length } => {
+        LogEvent::AddBlockSent {
+            node_id,
+            sender_id,
+            sequence,
+            length,
+        } => {
             // Store as FullMessage for Message Stream tab
-            state.add_full_message(*node_id, FullMessage {
-                timestamp: convert_to_embassy_instant(timestamp),
-                message_type: 6, // AddBlock
-                sender_node: *sender_id,
-                sequence: *sequence,
-                length: *length,
-                is_outgoing: true, // Sent
-            });
+            state.add_full_message(
+                *node_id,
+                FullMessage {
+                    timestamp: convert_to_embassy_instant(timestamp),
+                    message_type: 6, // AddBlock
+                    sender_node: *sender_id,
+                    sequence: *sequence,
+                    length: *length,
+                    is_outgoing: true, // Sent
+                },
+            );
         }
         LogEvent::Position { x, y } => {
             log::debug!("Position event: ({}, {})", x, y);
             // Position updates could be handled here if needed
+        }
+        LogEvent::VersionInfo {
+            node_id,
+            probe_version,
+            node_version,
+        } => {
+            // Store version info for this node
+            state.node_versions.insert(*node_id, (*probe_version, *node_version));
+            log::debug!("Node {} version info: probe={}, node={}", node_id, probe_version, node_version);
         }
     }
 
@@ -437,7 +462,7 @@ async fn process_event(
 /// A `NodeInfo` struct with the node's message history.
 fn build_node_info(node_id: u32, state: &AnalyzerState) -> NodeInfo {
     log::info!("Building NodeInfo for node {}", node_id);
-    
+
     // Build radio packets from packet history
     let messages = if let Some(history) = state.node_packet_histories.get(&node_id) {
         history
@@ -514,11 +539,16 @@ fn build_node_info(node_id: u32, state: &AnalyzerState) -> NodeInfo {
         Vec::new()
     };
 
+    // Get version info from TM8 if available
+    let (probe_version, node_version) = state.node_versions.get(&node_id).map(|(p, n)| (Some(*p), Some(*n))).unwrap_or((None, None));
+
     NodeInfo {
         node_id,
         radio_packets: messages,
         messages: full_messages,
         log_lines,
+        probe_version,
+        node_version,
     }
 }
 

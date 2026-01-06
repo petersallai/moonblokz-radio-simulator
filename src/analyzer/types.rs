@@ -61,6 +61,8 @@ pub enum LogEvent {
         sequence: u32,
         length: usize,
     },
+    /// *TM8* - Version information.
+    VersionInfo { node_id: u32, probe_version: u8, node_version: u8 },
     /// Position update for a node (for potential future use).
     Position { x: f64, y: f64 },
 }
@@ -100,6 +102,8 @@ pub struct AnalyzerState {
     pub node_full_messages: HashMap<u32, VecDeque<FullMessage>>,
     /// Last processed log timestamp for delay calculation.
     pub last_processed_timestamp: Option<DateTime<Utc>>,
+    /// Per-node version info from TM8: (probe_version, node_version).
+    pub node_versions: HashMap<u32, (u8, u8)>,
 }
 
 impl AnalyzerState {
@@ -112,6 +116,7 @@ impl AnalyzerState {
             node_log_histories: HashMap::new(),
             node_full_messages: HashMap::new(),
             last_processed_timestamp: None,
+            node_versions: HashMap::new(),
         }
     }
 

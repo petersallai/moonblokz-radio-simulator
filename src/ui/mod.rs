@@ -60,6 +60,10 @@ pub struct NodeInfo {
     pub messages: Vec<FullMessage>,
     /// Log lines for this node - Log Stream tab.
     pub log_lines: Vec<LogLine>,
+    /// Probe version from TM8 message (None if not received yet).
+    pub probe_version: Option<u8>,
+    /// Node version from TM8 message (None if not received yet).
+    pub node_version: Option<u8>,
 }
 
 /// Events pushed from the network task to update the UI state.
