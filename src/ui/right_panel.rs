@@ -66,12 +66,10 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
                 ui.label(",");
                 ui.label(egui::RichText::new(format!("{:.5}", p.position.y)).strong());
                 ui.label(")");
-            });
-            ui.horizontal(|ui| {
+                ui.add_space(10.0);
                 ui.label("Radio strength:");
                 ui.label(egui::RichText::new(format!("{}", p.radio_strength)).strong());
             });
-            ui.separator();
 
             let mut sent_messages_count = 0;
             let mut received_messages_count = 0;
@@ -87,11 +85,10 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
             }
 
             ui.horizontal(|ui| {
-                ui.label("Sent messages:");
+                ui.label("Sent packets:");
                 ui.label(egui::RichText::new(format!("{}", sent_messages_count)).strong());
-            });
-            ui.horizontal(|ui| {
-                ui.label("Received messages:");
+                ui.add_space(10.0);
+                ui.label("Received packets:");
                 ui.label(egui::RichText::new(format!("{}", received_messages_count)).strong());
             });
 
