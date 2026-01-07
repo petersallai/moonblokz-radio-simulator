@@ -63,6 +63,8 @@ pub enum LogEvent {
     },
     /// *TM8* - Version information.
     VersionInfo { node_id: u32, probe_version: u8, node_version: u8 },
+    /// *TM5* - Packet CRC mismatch (corrupted packet).
+    PacketCrcError { node_id: u32, link_quality: u8 },
     /// Position update for a node (for potential future use).
     Position { x: f64, y: f64 },
 }

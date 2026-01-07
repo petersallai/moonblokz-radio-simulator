@@ -268,29 +268,56 @@ fn draw_nodes(painter: &egui::Painter, rect: egui::Rect, state: &mut AppState, u
         state.node_radio_transfer_indicators.remove(&id);
     }
 
-    for p in state.nodes.iter() {
+    for (idx, p) in state.nodes.iter().enumerate() {
         let pos = egui::pos2(
             egui::lerp(rect.left()..=rect.right(), ((p.position.x - world_min_x) / world_width) as f32),
             egui::lerp(rect.top()..=rect.bottom(), ((p.position.y - world_min_y) / world_height) as f32),
         );
 
-        let mut color = Color32::from_rgb(40, 200, 255);
+        let is_selected = state.selected == Some(idx);
+        let mut color = if is_selected {
+            Color32::from_rgb(0, 255, 0) // Green for selected node
+        } else {
+            Color32::from_rgb(40, 200, 255) // Cyan for others
+        };
 
         if state.measurement_identifier != 0 && state.reached_nodes.contains(&p.node_id) {
-            color = Color32::from_rgb(0, 255, 0); // Green if reached in current measurement
+            color = Color32::from_rgb(255, 255, 0); // Yellow if reached in current measurement
         }
 
         painter.circle_filled(pos, radius, color);
 
         // Optional ID label next to each node
         if state.show_node_ids {
-            let label_pos = egui::pos2(pos.x + 6.0, pos.y - 6.0);
+            let label_text = format!("#{}", p.node_id);
+            let font_id = egui::FontId::monospace(12.0);
+            let bg_color = if is_selected {
+                Color32::from_rgb(0, 255, 0) // Green for selected node
+            } else {
+                Color32::from_rgb(40, 200, 255) // Cyan for others
+            };
+            let text_color = Color32::BLACK;
+
+            // Calculate text size for the background rectangle
+            let galley = painter.layout_no_wrap(label_text.clone(), font_id.clone(), text_color);
+            let text_size = galley.size();
+            let padding = egui::vec2(3.0, 2.0);
+
+            let label_pos = egui::pos2(pos.x + 4.0, pos.y - 4.0);
+            let rect_min = egui::pos2(label_pos.x, label_pos.y - text_size.y - padding.y);
+            let rect_max = egui::pos2(label_pos.x + text_size.x + padding.x * 2.0, label_pos.y + padding.y);
+            let label_rect = egui::Rect::from_min_max(rect_min, rect_max);
+
+            // Draw background rectangle
+            painter.rect_filled(label_rect, 2.0, bg_color);
+
+            // Draw text on top
             painter.text(
-                label_pos,
+                egui::pos2(label_pos.x + padding.x, label_pos.y),
                 egui::Align2::LEFT_BOTTOM,
-                format!("#{}", p.node_id),
-                egui::FontId::monospace(12.0),
-                Color32::from_rgb(40, 200, 255),
+                label_text,
+                font_id,
+                text_color,
             );
         }
 
@@ -316,7 +343,7 @@ fn draw_radio_indicator(painter: &egui::Painter, rect: egui::Rect, state: &AppSt
     if let Some((expiry, message_type, distance)) = state.node_radio_transfer_indicators.get(&node_id) {
         let now = Instant::now();
         if *expiry > now {
-            let remaining = *expiry - Instant::now();
+            let remaining = *expiry - now;
             if remaining > Duration::from_millis(0) {
                 let alpha = (remaining.as_millis() as f32 / NODE_RADIO_TRANSFER_INDICATOR_TIMEOUT as f32).clamp(0.0, 1.0);
                 // Distance is in meters, convert to pixels
@@ -359,7 +386,8 @@ fn draw_radio_range(painter: &egui::Painter, rect: egui::Rect, selected_node: &c
     let pixels_per_meter_y = rect.height() / state.height as f32;
     let avg_pixels_per_meter = (pixels_per_meter_x + pixels_per_meter_y) / 2.0;
     let radius = selected_node.radio_strength as f32 * avg_pixels_per_meter;
-    painter.circle_filled(pos, radius, Color32::from_rgba_unmultiplied(0, 128, 255, 50));
+    painter.circle_filled(pos, radius, Color32::from_rgba_unmultiplied(0, 255, 0, 5));
+    painter.circle_stroke(pos, radius, egui::Stroke::new(2.0, Color32::from_rgba_unmultiplied(0, 255, 0, 100)));
 }
 
 /// Handle mouse clicks on the map for node selection.

@@ -58,7 +58,16 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
             let p = &state.nodes[i];
             ui.horizontal(|ui| {
                 ui.label("Selected Node:");
-                ui.label(egui::RichText::new(format!("#{}", p.node_id)).strong().color(Color32::from_rgb(0, 128, 255)));
+                let node_id_text = format!("#{}", p.node_id);
+                let font_id = egui::FontId::default();
+                let bg_color = Color32::from_rgb(0, 255, 0); // Green
+                let text_color = Color32::BLACK;
+                let galley = ui.painter().layout_no_wrap(node_id_text.clone(), font_id.clone(), text_color);
+                let text_size = galley.size();
+                let padding = egui::vec2(4.0, 2.0);
+                let (rect, _response) = ui.allocate_exact_size(egui::vec2(text_size.x + padding.x * 2.0, text_size.y + padding.y * 2.0), egui::Sense::hover());
+                ui.painter().rect_filled(rect, 2.0, bg_color);
+                ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, node_id_text, font_id, text_color);
             });
             // Display version info if available (from TM8 messages in analyzer modes only)
             if state.operating_mode != OperatingMode::Simulation {
@@ -296,9 +305,17 @@ fn render_radio_stream_table(ui: &mut egui::Ui, state: &AppState, node_info: &cr
                     7 => "Add trans",
                     8 => "Req mempool",
                     9 => "Support",
+                    255 => "Packet CRC Error",
                     _ => "Unknown",
                 };
-                let from_string = if is_self { "Sent msg".to_string() } else { format!("#{}", msg.sender_node) };
+                let from_string = if msg.message_type == 255 {
+                    // For CRC errors, sender is unknown
+                    "?".to_string()
+                } else if is_self {
+                    "Sent msg".to_string()
+                } else {
+                    format!("#{}", msg.sender_node)
+                };
 
                 // Format time based on operating mode
                 let time_string = match state.operating_mode {
@@ -359,7 +376,7 @@ fn render_radio_stream_table(ui: &mut egui::Ui, state: &AppState, node_info: &cr
                         let rect = ui.available_rect_before_wrap();
                         ui.painter().rect_filled(rect, 0.0, fill);
                     }
-                    ui.colored_label(row_color, format!("{}/{}", msg.packet_index + 1, msg.packet_count));
+                    ui.colored_label(row_color, format!("{}/{}", msg.packet_index, msg.packet_count));
                 });
                 row.col(|ui| {
                     if let Some(fill) = collision_fill {

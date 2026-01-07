@@ -5,6 +5,7 @@
 //! - *TM2*: Packet received
 //! - *TM3*: Start measurement
 //! - *TM4*: Full message received
+//! - *TM5*: Packet CRC mismatch (corrupted packet)
 //! - *TM6*: AddBlock message fully received
 //! - *TM7*: AddBlock message sent
 //! - *TM8*: Version information
@@ -53,6 +54,8 @@ pub fn parse_log_line(line: &str) -> Option<(DateTime<Utc>, LogEvent)> {
         parse_tm3(line, node_id).map(|event| (timestamp, event))
     } else if line.contains("*TM4*") {
         parse_tm4(line, node_id).map(|event| (timestamp, event))
+    } else if line.contains("*TM5*") || line.contains("TM5 CRC mismatch") {
+        parse_tm5(line, node_id).map(|event| (timestamp, event))
     } else if line.contains("*TM6*") {
         parse_tm6(line, node_id).map(|event| (timestamp, event))
     } else if line.contains("*TM7*") {
@@ -230,6 +233,18 @@ fn parse_tm4(line: &str, node_id: u32) -> Option<LogEvent> {
     })
 }
 
+/// Parse *TM5* - Packet CRC mismatch.
+///
+/// Log format:
+/// ```text
+/// [{nodeid}] TM5 CRC mismatch: received=XXXX, calculated=XXXX. link quality: XX. Dropping packet.
+/// ```
+fn parse_tm5(line: &str, node_id: u32) -> Option<LogEvent> {
+    let link_quality = extract_field_u8(line, "link quality:").unwrap_or(0);
+
+    Some(LogEvent::PacketCrcError { node_id, link_quality })
+}
+
 /// Parse *TM6* - AddBlock message fully received.
 ///
 /// Log format:
@@ -274,9 +289,9 @@ fn extract_field_u8(line: &str, field_name: &str) -> Option<u8> {
     let start = pos + field_name.len();
     let remaining = &line[start..].trim_start();
 
-    // Find the end of the number (comma, space, or end of line)
+    // Find the end of the number (comma, space, period, or end of line)
     let end = remaining
-        .find(|c: char| c == ',' || c == ' ' || c == '\n' || c == '\r')
+        .find(|c: char| c == ',' || c == ' ' || c == '.' || c == '\n' || c == '\r')
         .unwrap_or(remaining.len());
 
     remaining[..end].parse().ok()
@@ -445,5 +460,20 @@ mod tests {
         let line = "This is not a valid log line";
         let result = parse_log_line(line);
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_parse_tm5_crc_mismatch() {
+        let line = "2025-10-23T18:00:01Z [3094] TM5 CRC mismatch: received=AB12, calculated=CD34. link quality: 15. Dropping packet.";
+        let result = parse_log_line(line);
+        assert!(result.is_some());
+
+        let (_, event) = result.unwrap();
+        if let LogEvent::PacketCrcError { node_id, link_quality } = event {
+            assert_eq!(node_id, 3094);
+            assert_eq!(link_quality, 15);
+        } else {
+            panic!("Expected PacketCrcError event");
+        }
     }
 }

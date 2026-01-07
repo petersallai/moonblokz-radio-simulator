@@ -248,7 +248,7 @@ impl AppState {
             measurement_total_message_count: 0,
             poor_limit: 0,
             excellent_limit: 0,
-            show_node_ids: false,
+            show_node_ids: true,
             world_top_left: Point { x: 0.0, y: 0.0 },
             world_bottom_right: Point { x: 100.0, y: 100.0 },
             width: 1.0,

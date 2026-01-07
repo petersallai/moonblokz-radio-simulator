@@ -441,6 +441,18 @@ async fn process_event(
             state.node_versions.insert(*node_id, (*probe_version, *node_version));
             log::debug!("Node {} version info: probe={}, node={}", node_id, probe_version, node_version);
         }
+        LogEvent::PacketCrcError { node_id, .. } => {
+            // CRC errors are treated like collisions - store in packet history
+            // They will be visualized with red background in the radio stream
+            state.add_packet_record(
+                *node_id,
+                NodePacketRecord {
+                    timestamp,
+                    event: event.clone(),
+                },
+            );
+            log::debug!("Node {} received packet with CRC error", node_id);
+        }
     }
 
     // Send timestamp update for UI display (as embassy_time::Instant from Unix epoch)
@@ -509,6 +521,17 @@ fn build_node_info(node_id: u32, state: &AnalyzerState) -> NodeInfo {
                         link_quality: *link_quality,
                         collision: false,
                         sequence: *sequence,
+                    }),
+                    LogEvent::PacketCrcError { link_quality, .. } => Some(NodeMessage {
+                        timestamp,
+                        message_type: 255, // Special type for CRC errors - will be shown as "Packet CRC Error"
+                        packet_size: 0,
+                        packet_count: 0,
+                        packet_index: 0,
+                        sender_node: 0, // Unknown sender
+                        link_quality: *link_quality,
+                        collision: true, // Mark as collision for red background
+                        sequence: None,
                     }),
                     _ => None, // Skip other event types
                 }
