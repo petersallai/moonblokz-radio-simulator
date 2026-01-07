@@ -548,10 +548,14 @@ fn render_log_stream(ui: &mut egui::Ui, state: &mut AppState, log_lines: &[crate
         .sense(egui::Sense::click())
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
         .column(Column::exact(60.0)) // Time
+        .column(Column::exact(16.0)) // Level (single letter)
         .column(Column::remainder().clip(true)) // Log content - clips to prevent blocking resize
         .header(row_height, |mut header| {
             header.col(|ui| {
                 ui.strong("Time");
+            });
+            header.col(|ui| {
+                ui.strong("L");
             });
             header.col(|ui| {
                 ui.strong("Log");
@@ -569,6 +573,14 @@ fn render_log_stream(ui: &mut egui::Ui, state: &mut AppState, log_lines: &[crate
                     LogLevel::Warn => Color32::YELLOW,
                     LogLevel::Info => Color32::WHITE,
                     LogLevel::Debug | LogLevel::Trace => Color32::GRAY,
+                };
+
+                let level_letter = match log_line.level {
+                    LogLevel::Trace => "T",
+                    LogLevel::Debug => "D",
+                    LogLevel::Info => "I",
+                    LogLevel::Warn => "W",
+                    LogLevel::Error => "E",
                 };
 
                 // Format time based on operating mode
@@ -589,6 +601,9 @@ fn render_log_stream(ui: &mut egui::Ui, state: &mut AppState, log_lines: &[crate
 
                 row.col(|ui| {
                     ui.colored_label(color, &time_string);
+                });
+                row.col(|ui| {
+                    ui.colored_label(color, level_letter);
                 });
                 row.col(|ui| {
                     ui.colored_label(color, &log_line.content);

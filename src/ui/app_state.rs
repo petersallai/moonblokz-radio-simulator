@@ -176,6 +176,8 @@ pub struct AppState {
     pub right_panel_width: f32,
     /// Filter string for the log stream tab.
     pub log_filter: String,
+    /// Current log level filter for moonblokz-radio-lib (used in simulation mode).
+    pub log_level_filter: log::LevelFilter,
 }
 
 /// Settings persisted across application sessions.
@@ -261,6 +263,7 @@ impl AppState {
             last_simulation_time: None,
             right_panel_width: persisted.right_panel_width.unwrap_or(500.0),
             log_filter: String::new(),
+            log_level_filter: log::LevelFilter::Info,
         }
     }
 

@@ -291,6 +291,24 @@ fn render_controls(ui: &mut egui::Ui, state: &mut AppState) {
                     crate::time_driver::set_simulation_speed_percent(state.speed_percent);
                 }
             });
+            ui.horizontal(|ui| {
+                ui.label("Log level:");
+                egui::ComboBox::from_id_source("log_level_selector")
+                    .selected_text(format!("{}", state.log_level_filter))
+                    .show_ui(ui, |ui| {
+                        for level in [
+                            log::LevelFilter::Trace,
+                            log::LevelFilter::Debug,
+                            log::LevelFilter::Info,
+                            log::LevelFilter::Warn,
+                            log::LevelFilter::Error,
+                        ] {
+                            if ui.selectable_value(&mut state.log_level_filter, level, format!("{}", level)).changed() {
+                                log::set_max_level(state.log_level_filter);
+                            }
+                        }
+                    });
+            });
         }
         OperatingMode::RealtimeTracking => {
             // Real-time mode: show delay indicator instead of speed controls
