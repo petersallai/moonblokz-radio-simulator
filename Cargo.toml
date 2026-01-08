@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies]
 eframe = { version = "0.27", default-features = false, features = ["wgpu","persistence"] }
 egui = { version = "0.27", features = ["default_fonts"] }
-egui_extras = { version = "0.27", features = ["image"] }
+egui_extras = { version = "0.27", features = ["image", "datepicker"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 
 
@@ -28,3 +28,5 @@ anyhow = "1"
 rand_distr = "0.4"
 rfd="0.15.4"
 chrono = "0.4"
+toml = "0.8"
+reqwest = { version = "0.11", features = ["json", "blocking"] }

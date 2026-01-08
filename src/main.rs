@@ -44,10 +44,10 @@ use std::thread;
 
 mod analyzer;
 mod common;
+mod control;
 mod simulation;
 mod time_driver;
 mod ui;
-
 
 /// Capacity of the UI refresh channel (network → UI).
 /// Large enough to handle bursts of node updates without blocking the simulation.
@@ -227,7 +227,7 @@ fn main() {
     };
     // Run the eframe event loop with our AppState managing UI updates
     let _ = eframe::run_native(
-        "MoonBlokz Radio Simulator",
+        "MoonBlokz Radio Simulator/Analyzer",
         native_options,
         Box::new(move |cc| Box::new(ui::AppState::new(ui_refresh_rx, ui_command_tx, cc.storage))),
     );

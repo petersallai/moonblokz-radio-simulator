@@ -273,6 +273,15 @@ fn render_controls(ui: &mut egui::Ui, state: &mut AppState) {
         OperatingMode::Simulation => {
             // Full controls for simulation mode
             ui.horizontal(|ui| {
+                ui.label("Mode:");
+                ui.label(egui::RichText::new("Simulation").strong());
+                ui.add_space(20.0);
+                let mut show_ids = state.show_node_ids;
+                if ui.checkbox(&mut show_ids, "Show node IDs").changed() {
+                    state.show_node_ids = show_ids;
+                }
+            });
+            ui.horizontal(|ui| {
                 ui.label("Speed:");
                 let mut speed = state.speed_percent as f64;
                 if ui.add(egui::Slider::new(&mut speed, 20.0..=1000.0).suffix("%")).changed() {
@@ -315,6 +324,11 @@ fn render_controls(ui: &mut egui::Ui, state: &mut AppState) {
             ui.horizontal(|ui| {
                 ui.label("Mode:");
                 ui.label(egui::RichText::new("Real-time Tracking").strong());
+                ui.add_space(20.0);
+                let mut show_ids = state.show_node_ids;
+                if ui.checkbox(&mut show_ids, "Show node IDs").changed() {
+                    state.show_node_ids = show_ids;
+                }
             });
             ui.horizontal(|ui| {
                 ui.label("Delay:");
@@ -323,9 +337,59 @@ fn render_controls(ui: &mut egui::Ui, state: &mut AppState) {
                 let secs = total_secs % 60;
                 ui.label(egui::RichText::new(format!("{:02}:{:02}", mins, secs)).strong());
             });
+
+            // Network Commands section
+            ui.add_space(5.0);
+            ui.separator();
+            ui.label(egui::RichText::new("Network Commands").strong());
+
+            let button_enabled = state.control_available;
+            let button_tooltip = if button_enabled {
+                ""
+            } else {
+                "Control not available. Add config.toml to the scene directory."
+            };
+
+            ui.horizontal(|ui| {
+                ui.add_enabled_ui(button_enabled, |ui| {
+                    if ui
+                        .button("Update Interval")
+                        .on_disabled_hover_text(button_tooltip)
+                        .on_hover_text("Configure active/inactive update intervals for all nodes")
+                        .clicked()
+                    {
+                        state.open_set_update_interval_modal();
+                    }
+                    if ui
+                        .button("Log Level")
+                        .on_disabled_hover_text(button_tooltip)
+                        .on_hover_text("Set log level and filter for all nodes")
+                        .clicked()
+                    {
+                        state.open_set_log_level_modal(None);
+                    }
+                    if ui
+                        .button("Send Command")
+                        .on_disabled_hover_text(button_tooltip)
+                        .on_hover_text("Send a custom command to all nodes")
+                        .clicked()
+                    {
+                        state.open_send_command_modal(None);
+                    }
+                });
+            });
         }
         OperatingMode::LogVisualization => {
             // Log visualization: speed controls but no auto-speed
+            ui.horizontal(|ui| {
+                ui.label("Mode:");
+                ui.label(egui::RichText::new("Log Visualization").strong());
+                ui.add_space(20.0);
+                let mut show_ids = state.show_node_ids;
+                if ui.checkbox(&mut show_ids, "Show node IDs").changed() {
+                    state.show_node_ids = show_ids;
+                }
+            });
             ui.horizontal(|ui| {
                 ui.label("Speed:");
                 let mut speed = state.speed_percent as f64;
@@ -341,12 +405,6 @@ fn render_controls(ui: &mut egui::Ui, state: &mut AppState) {
                 }
             });
         }
-    }
-
-    ui.separator();
-    let mut show_ids = state.show_node_ids;
-    if ui.checkbox(&mut show_ids, "Show node IDs").changed() {
-        state.show_node_ids = show_ids;
     }
 
     // Show delay warning for simulation mode

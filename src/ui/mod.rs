@@ -107,6 +107,8 @@ pub enum UIRefreshState {
     /// Current operating mode changed.
     ModeChanged(OperatingMode),
     TimeUpdated(Instant),
+    /// Indicates whether control commands are available (config loaded successfully).
+    ControlAvailable(bool),
 }
 
 /// UI-specific representation of a node's state.
@@ -144,4 +146,6 @@ pub enum UICommand {
         scene_path: String,
         log_path: Option<String>,
     },
+    /// Send a control command to the Telemetry Hub.
+    SendControlCommand(crate::control::ControlCommand),
 }

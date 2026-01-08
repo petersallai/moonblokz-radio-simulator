@@ -28,6 +28,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 
 use super::{NodeInfo, NodeUIState, OperatingMode, UICommand, UIRefreshState, mode_selector};
+use crate::control::LogLevel;
 use crate::simulation::Obstacle;
 use crate::simulation::Point;
 
@@ -44,6 +45,79 @@ pub enum InspectorTab {
     RadioStream,
     MessageStream,
     LogStream,
+}
+
+/// Type of control modal currently open.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ControlModalType {
+    SetUpdateInterval,
+    SetLogLevel,
+    SendCommand,
+}
+
+/// Modal dialog state for control commands.
+#[derive(Debug, Clone)]
+pub struct ControlModalState {
+    /// Which modal is currently open, if any.
+    pub active_modal: Option<ControlModalType>,
+
+    // Set Update Interval modal fields
+    /// Active update interval in seconds (text for input).
+    pub update_interval_active: String,
+    /// Inactive update interval in seconds (text for input).
+    pub update_interval_inactive: String,
+    /// Start date for the update interval schedule.
+    pub update_interval_start_date: chrono::NaiveDate,
+    /// Start time as "HH:MM:SS".
+    pub update_interval_start_time: String,
+    /// End date for the update interval schedule.
+    pub update_interval_end_date: chrono::NaiveDate,
+    /// End time as "HH:MM:SS".
+    pub update_interval_end_time: String,
+
+    // Set Log Level modal fields
+    /// Selected log level.
+    pub log_level: LogLevel,
+    /// Log filter string.
+    pub log_filter: String,
+
+    // Send Command modal field
+    /// Arbitrary command text.
+    pub command_text: String,
+
+    // Target node for per-node modals (None = all nodes)
+    pub target_node_id: Option<u32>,
+
+    // Validation error message, if any
+    pub validation_error: Option<String>,
+}
+
+impl Default for ControlModalState {
+    fn default() -> Self {
+        let now = chrono::Local::now();
+        let today = now.date_naive();
+        let current_time = now.format("%H:%M:%S").to_string();
+
+        // End time is current time + 2 hours
+        let end_datetime = now + chrono::Duration::hours(2);
+        let end_date = end_datetime.date_naive();
+        let end_time = end_datetime.format("%H:%M:%S").to_string();
+
+        Self {
+            active_modal: None,
+            update_interval_active: String::new(),
+            update_interval_inactive: String::new(),
+            update_interval_start_date: today,
+            update_interval_start_time: current_time,
+            update_interval_end_date: end_date,
+            update_interval_end_time: end_time,
+            log_level: LogLevel::Info,
+            log_filter: String::new(),
+            command_text: String::new(),
+            target_node_id: None,
+            validation_error: None,
+        }
+    }
 }
 
 /// Central application state managing all UI components and simulation coordination.
@@ -178,6 +252,12 @@ pub struct AppState {
     pub log_filter: String,
     /// Current log level filter for moonblokz-radio-lib (used in simulation mode).
     pub log_level_filter: log::LevelFilter,
+
+    // Control command state (real-time tracking mode only)
+    /// Whether control commands are available (config loaded successfully).
+    pub control_available: bool,
+    /// Modal dialog state for control commands.
+    pub control_modal: ControlModalState,
 }
 
 /// Settings persisted across application sessions.
@@ -264,6 +344,8 @@ impl AppState {
             right_panel_width: persisted.right_panel_width.unwrap_or(500.0),
             log_filter: String::new(),
             log_level_filter: log::LevelFilter::Info,
+            control_available: false,
+            control_modal: ControlModalState::default(),
         }
     }
 
@@ -470,6 +552,255 @@ impl AppState {
 
         // Reset operating mode to default
         self.operating_mode = OperatingMode::Simulation;
+
+        // Reset control state
+        self.control_available = false;
+        self.control_modal = ControlModalState::default();
+    }
+
+    /// Render control command modal dialogs.
+    fn render_control_modals(&mut self, ctx: &egui::Context) {
+        use egui_extras::DatePickerButton;
+
+        let modal_type = match self.control_modal.active_modal.clone() {
+            Some(m) => m,
+            None => return,
+        };
+
+        let title = match modal_type {
+            ControlModalType::SetUpdateInterval => "Set Network Update Interval".to_string(),
+            ControlModalType::SetLogLevel => {
+                if let Some(node_id) = self.control_modal.target_node_id {
+                    format!("Set Log Level for #{}", node_id)
+                } else {
+                    "Set Log Level for All Nodes".to_string()
+                }
+            }
+            ControlModalType::SendCommand => {
+                if let Some(node_id) = self.control_modal.target_node_id {
+                    format!("Send Command to #{}", node_id)
+                } else {
+                    "Send Command to All Nodes".to_string()
+                }
+            }
+        };
+
+        let mut close_modal = false;
+        let mut send_commands: Vec<crate::control::ControlCommand> = Vec::new();
+
+        egui::Window::new(title)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                egui::Frame::none().inner_margin(egui::Margin::same(10.0)).show(ui, |ui| {
+                    match modal_type {
+                        ControlModalType::SetUpdateInterval => {
+                            ui.heading("Interval Settings");
+
+                            egui::Grid::new("interval_grid").num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
+                                ui.label("Active interval (seconds):");
+                                ui.add(egui::TextEdit::singleline(&mut self.control_modal.update_interval_active).desired_width(80.0));
+                                ui.end_row();
+
+                                ui.label("Inactive interval (seconds):");
+                                ui.add(egui::TextEdit::singleline(&mut self.control_modal.update_interval_inactive).desired_width(80.0));
+                                ui.end_row();
+                            });
+
+                            ui.add_space(10.0);
+                            ui.heading("Schedule");
+
+                            // Start date/time
+                            ui.horizontal(|ui| {
+                                ui.label("Start:");
+                                ui.add(DatePickerButton::new(&mut self.control_modal.update_interval_start_date).id_source("start_date"));
+                                ui.label("Time:");
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut self.control_modal.update_interval_start_time)
+                                        .desired_width(70.0)
+                                        .hint_text("HH:MM:SS"),
+                                );
+                            });
+
+                            // End date/time
+                            ui.horizontal(|ui| {
+                                ui.label("End:  ");
+                                ui.add(DatePickerButton::new(&mut self.control_modal.update_interval_end_date).id_source("end_date"));
+                                ui.label("Time:");
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut self.control_modal.update_interval_end_time)
+                                        .desired_width(70.0)
+                                        .hint_text("HH:MM:SS"),
+                                );
+                            });
+                        }
+                        ControlModalType::SetLogLevel => {
+                            ui.horizontal(|ui| {
+                                ui.label("Log level:");
+                                egui::ComboBox::from_id_source("log_level_control")
+                                    .selected_text(format!("{}", self.control_modal.log_level))
+                                    .show_ui(ui, |ui| {
+                                        ui.selectable_value(&mut self.control_modal.log_level, LogLevel::Trace, "TRACE");
+                                        ui.selectable_value(&mut self.control_modal.log_level, LogLevel::Debug, "DEBUG");
+                                        ui.selectable_value(&mut self.control_modal.log_level, LogLevel::Info, "INFO");
+                                        ui.selectable_value(&mut self.control_modal.log_level, LogLevel::Warn, "WARN");
+                                        ui.selectable_value(&mut self.control_modal.log_level, LogLevel::Error, "ERROR");
+                                    });
+                            });
+
+                            ui.horizontal(|ui| {
+                                ui.label("Log filter:");
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut self.control_modal.log_filter)
+                                        .desired_width(150.0)
+                                        .hint_text("e.g., TM8"),
+                                );
+                            });
+                        }
+                        ControlModalType::SendCommand => {
+                            ui.horizontal(|ui| {
+                                ui.label("Command:");
+                                ui.add(egui::TextEdit::singleline(&mut self.control_modal.command_text).desired_width(200.0));
+                            });
+                        }
+                    }
+
+                    // Validation error display
+                    if let Some(error) = &self.control_modal.validation_error {
+                        ui.add_space(5.0);
+                        ui.colored_label(egui::Color32::RED, error);
+                    }
+
+                    // Button row
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        // Push buttons to the right by consuming remaining space first
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("Send").clicked() {
+                                // Validate and construct command(s)
+                                match modal_type {
+                                    ControlModalType::SetUpdateInterval => match self.validate_and_build_update_interval_command() {
+                                        Ok(cmd) => {
+                                            send_commands.push(cmd);
+                                            close_modal = true;
+                                        }
+                                        Err(e) => {
+                                            self.control_modal.validation_error = Some(e);
+                                        }
+                                    },
+                                    ControlModalType::SetLogLevel => {
+                                        // Send both log level and log filter commands
+                                        let node_id = self.control_modal.target_node_id;
+                                        send_commands.push(crate::control::ControlCommand::SetLogLevel {
+                                            node_id,
+                                            log_level: self.control_modal.log_level,
+                                        });
+                                        send_commands.push(crate::control::ControlCommand::SetLogFilter {
+                                            node_id,
+                                            log_filter: self.control_modal.log_filter.clone(),
+                                        });
+                                        close_modal = true;
+                                    }
+                                    ControlModalType::SendCommand => {
+                                        if self.control_modal.command_text.trim().is_empty() {
+                                            self.control_modal.validation_error = Some("Command cannot be empty".to_string());
+                                        } else {
+                                            send_commands.push(crate::control::ControlCommand::RunCommand {
+                                                node_id: self.control_modal.target_node_id,
+                                                command: self.control_modal.command_text.clone(),
+                                            });
+                                            close_modal = true;
+                                        }
+                                    }
+                                }
+                            }
+                            if ui.button("Cancel").clicked() {
+                                close_modal = true;
+                            }
+                        }); // Close right_to_left layout
+                    }); // Close horizontal
+                }); // Close Frame
+            });
+
+        if close_modal {
+            self.control_modal.active_modal = None;
+            self.control_modal.validation_error = None;
+        }
+
+        // Send commands
+        for cmd in send_commands {
+            let _ = self.ui_command_tx.try_send(UICommand::SendControlCommand(cmd));
+        }
+    }
+
+    /// Validate and build the SetUpdateInterval command from modal state.
+    fn validate_and_build_update_interval_command(&self) -> Result<crate::control::ControlCommand, String> {
+        // Parse active interval
+        let active_period: u32 = self
+            .control_modal
+            .update_interval_active
+            .parse()
+            .map_err(|_| "Active interval must be a positive number".to_string())?;
+        if active_period == 0 {
+            return Err("Active interval must be a positive number".to_string());
+        }
+
+        // Parse inactive interval
+        let inactive_period: u32 = self
+            .control_modal
+            .update_interval_inactive
+            .parse()
+            .map_err(|_| "Inactive interval must be a positive number".to_string())?;
+        if inactive_period == 0 {
+            return Err("Inactive interval must be a positive number".to_string());
+        }
+
+        // Parse start time
+        let start_time_naive = chrono::NaiveTime::parse_from_str(&self.control_modal.update_interval_start_time, "%H:%M:%S")
+            .map_err(|_| "Invalid start time format. Use HH:MM:SS".to_string())?;
+        let start_datetime_naive = self.control_modal.update_interval_start_date.and_time(start_time_naive);
+        let start_time = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(start_datetime_naive, chrono::Utc);
+
+        // Parse end time
+        let end_time_naive = chrono::NaiveTime::parse_from_str(&self.control_modal.update_interval_end_time, "%H:%M:%S")
+            .map_err(|_| "Invalid end time format. Use HH:MM:SS".to_string())?;
+        let end_datetime_naive = self.control_modal.update_interval_end_date.and_time(end_time_naive);
+        let end_time = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(end_datetime_naive, chrono::Utc);
+
+        // Validate end is after start
+        if end_time <= start_time {
+            return Err("End date/time must be after start date/time".to_string());
+        }
+
+        Ok(crate::control::ControlCommand::SetUpdateInterval {
+            node_id: self.control_modal.target_node_id,
+            start_time,
+            end_time,
+            active_period,
+            inactive_period,
+        })
+    }
+
+    /// Open the Set Update Interval modal.
+    pub fn open_set_update_interval_modal(&mut self) {
+        self.control_modal = ControlModalState::default();
+        self.control_modal.active_modal = Some(ControlModalType::SetUpdateInterval);
+        self.control_modal.target_node_id = None;
+    }
+
+    /// Open the Set Log Level modal for all nodes or a specific node.
+    pub fn open_set_log_level_modal(&mut self, node_id: Option<u32>) {
+        self.control_modal = ControlModalState::default();
+        self.control_modal.active_modal = Some(ControlModalType::SetLogLevel);
+        self.control_modal.target_node_id = node_id;
+    }
+
+    /// Open the Send Command modal for all nodes or a specific node.
+    pub fn open_send_command_modal(&mut self, node_id: Option<u32>) {
+        self.control_modal = ControlModalState::default();
+        self.control_modal.active_modal = Some(ControlModalType::SendCommand);
+        self.control_modal.target_node_id = node_id;
     }
 }
 
@@ -696,6 +1027,9 @@ impl eframe::App for AppState {
                         self.simulation_delay = Duration::from_millis(0);
                     }
                 }
+                UIRefreshState::ControlAvailable(available) => {
+                    self.control_available = available;
+                }
             }
         }
 
@@ -722,5 +1056,10 @@ impl eframe::App for AppState {
         super::top_panel::render(ctx, self);
         super::right_panel::render(ctx, self);
         super::map::render(ctx, self);
+
+        // Render control modals (only in real-time tracking mode)
+        if self.operating_mode == OperatingMode::RealtimeTracking {
+            self.render_control_modals(ctx);
+        }
     }
 }

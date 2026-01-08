@@ -116,19 +116,29 @@ fn extract_node_id_with_position(line: &str) -> Option<(u32, usize)> {
 /// Extract log level from a log line.
 ///
 /// Looks for standard log level indicators (ERROR, WARN, INFO, DEBUG, TRACE).
+/// Handles multiple log formats:
+/// - Simulator: `[timestamp LEVEL  module::path] [node_id] message`
+/// - Real device: `timestamp:[LEVEL] module: [node_id] message`
 fn extract_log_level(line: &str) -> LogLevel {
     // Check for log level markers in the line
     let upper = line.to_uppercase();
-    if upper.contains(" ERROR ") || upper.contains("ERROR:") {
+
+    // Look for level patterns in various formats:
+    // - "Z LEVEL " (simulator format after timestamp)
+    // - ":[LEVEL]" (real device format with brackets)
+    // - " LEVEL " or "LEVEL:" (generic patterns)
+    if upper.contains(" ERROR ") || upper.contains("Z ERROR ") || upper.contains(":[ERROR]") || upper.contains("ERROR:") {
         LogLevel::Error
-    } else if upper.contains(" WARN ") || upper.contains("WARN:") {
+    } else if upper.contains(" WARN ") || upper.contains("Z WARN ") || upper.contains(":[WARN]") || upper.contains("WARN:") {
         LogLevel::Warn
-    } else if upper.contains(" DEBUG ") || upper.contains("DEBUG:") {
+    } else if upper.contains(" DEBUG ") || upper.contains("Z DEBUG ") || upper.contains(":[DEBUG]") || upper.contains("DEBUG:") {
         LogLevel::Debug
-    } else if upper.contains(" TRACE ") || upper.contains("TRACE:") {
+    } else if upper.contains(" TRACE ") || upper.contains("Z TRACE ") || upper.contains(":[TRACE]") || upper.contains("TRACE:") {
         LogLevel::Trace
+    } else if upper.contains(" INFO ") || upper.contains("Z INFO ") || upper.contains(":[INFO]") || upper.contains("INFO:") {
+        LogLevel::Info
     } else {
-        // Default to Info for most log lines
+        // Default to Info for lines without explicit level
         LogLevel::Info
     }
 }

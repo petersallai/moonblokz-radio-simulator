@@ -5,6 +5,7 @@
 //! - Log file reading with mode-appropriate behavior
 //! - Time-synchronized event dispatching with adaptive delay recovery
 //! - UI command handling
+//! - Remote control commands to Telemetry Hub (real-time mode only)
 //!
 //! The main loop uses a two-phase select approach:
 //! 1. Wait for log line OR UI command
@@ -17,9 +18,11 @@ use chrono::{DateTime, Utc};
 use embassy_futures::select::{Either, select};
 use embassy_time::{Duration, Timer};
 use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
 use std::time::Instant;
 
 use crate::common::scene::{Scene, SceneMode, load_scene};
+use crate::control::{ControlCommand, ControlConfig, TelemetryClient};
 use crate::simulation::types::{FullMessage, LogLine, NodeMessage};
 use crate::ui::{NodeInfo, NodeUIState, UICommand, UIRefreshState};
 use crate::{UICommandQueueReceiver, UIRefreshQueueSender};
@@ -101,6 +104,38 @@ pub async fn analyzer_task(
 
     // Build node effective distances map for radio message visualization
     let node_effective_distances: HashMap<u32, u32> = scene.nodes.iter().map(|n| (n.node_id, n.effective_distance.unwrap_or(100))).collect();
+
+    // Initialize control client for real-time mode
+    let telemetry_client: Option<Arc<TelemetryClient>> = if mode == AnalyzerMode::RealtimeTracking {
+        let config_path = ControlConfig::config_path_from_scene(&scene_path);
+        if config_path.exists() {
+            match ControlConfig::load(&config_path) {
+                Ok(config) => {
+                    log::info!("Loaded control config from {:?}", config_path);
+                    match TelemetryClient::new(config) {
+                        Ok(client) => Some(Arc::new(client)),
+                        Err(e) => {
+                            log::warn!("Failed to create telemetry client: {}", e);
+                            None
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::warn!("Failed to load control config: {}", e);
+                    None
+                }
+            }
+        } else {
+            log::info!("No config.toml found in scene directory");
+            None
+        }
+    } else {
+        None
+    };
+
+    // Notify UI of control availability
+    let control_available = telemetry_client.is_some();
+    let _ = ui_refresh_tx.send(UIRefreshState::ControlAvailable(control_available)).await;
 
     // Initialize UI with scene data
     initialize_scene_ui(&scene, &ui_refresh_tx).await;
@@ -215,7 +250,7 @@ pub async fn analyzer_task(
                                         Either::Second(cmd) => {
                                             // UI command arrived during wait - handle it
                                             // The event is lost in this case (spec says start next iteration)
-                                            handle_ui_command(cmd, &state, &ui_refresh_tx);
+                                            handle_ui_command(cmd, &state, &ui_refresh_tx, &telemetry_client);
                                             continue;
                                         }
                                     }
@@ -249,26 +284,41 @@ pub async fn analyzer_task(
                         // After EOF, just keep responding to UI commands
                         loop {
                             let cmd = ui_command_rx.receive().await;
-                            handle_ui_command(cmd, &state, &ui_refresh_tx);
+                            handle_ui_command(cmd, &state, &ui_refresh_tx, &telemetry_client);
                         }
                     }
                 }
             }
             Either::Second(cmd) => {
                 // UI command received - handle it and continue to next iteration
-                handle_ui_command(cmd, &state, &ui_refresh_tx);
+                handle_ui_command(cmd, &state, &ui_refresh_tx, &telemetry_client);
             }
         }
     }
 }
 
 /// Handle a UI command.
-fn handle_ui_command(cmd: UICommand, state: &AnalyzerState, ui_refresh_tx: &UIRefreshQueueSender) {
+fn handle_ui_command(
+    cmd: UICommand,
+    state: &AnalyzerState,
+    ui_refresh_tx: &UIRefreshQueueSender,
+    telemetry_client: &Option<Arc<TelemetryClient>>,
+) {
     match cmd {
         UICommand::RequestNodeInfo(node_id) => {
             // Build NodeInfo from packet history
             let node_info = build_node_info(node_id, state);
             let _ = ui_refresh_tx.try_send(UIRefreshState::NodeInfo(node_info)).ok();
+        }
+        UICommand::SendControlCommand(control_cmd) => {
+            if let Some(client) = telemetry_client {
+                match client.send_command(&control_cmd) {
+                    Ok(_) => log::info!("Control command sent successfully"),
+                    Err(e) => log::error!("Failed to send control command: {}", e),
+                }
+            } else {
+                log::warn!("Control command received but no telemetry client available");
+            }
         }
         _ => {
             // Ignore other commands in analyzer mode

@@ -1026,6 +1026,10 @@ pub async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshQueueSender,
                     // StartMode is handled by the mode selector before simulation starts
                     log::debug!("StartMode command ignored in running simulation");
                 }
+                UICommand::SendControlCommand(_) => {
+                    // Control commands only apply to analyzer mode (real-time tracking)
+                    log::debug!("SendControlCommand ignored in simulation mode");
+                }
             },
             Either3::Third(_) => {
                 // Determine whether the real event was reached or this was just the periodic tick

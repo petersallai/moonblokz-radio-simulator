@@ -131,18 +131,21 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
             let button_h = ui.spacing().interact_size.y;
             let node_id = p.node_id; // Capture node_id before moving into closure
             let show_measurement_button = state.operating_mode != OperatingMode::LogVisualization;
+            let show_control_buttons = state.operating_mode == OperatingMode::RealtimeTracking;
+            let control_available = state.control_available;
             ui.allocate_ui_with_layout(egui::vec2(avail_w, ui.available_height()), egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
                 // Bottom buttons, centered at 80% width
                 // Hide measurement button in log visualization mode
                 if let Some(_i) = state.selected {
+                    let button_w = (avail_w * 0.8).max(0.0);
+                    let pad = (avail_w - button_w).max(0.0) / 2.0;
+
+                    // 20px padding at the very bottom under the last (bottom-most) button
+                    ui.add_space(20.0);
+
+                    // Measurement button (shown in Simulation and RealtimeTracking modes)
                     if show_measurement_button {
-                        let button_w = (avail_w * 0.8).max(0.0);
-
-                        // 20px padding at the very bottom under the last (bottom-most) button
-                        ui.add_space(20.0);
-
                         ui.horizontal(|ui| {
-                            let pad = (avail_w - button_w).max(0.0) / 2.0;
                             ui.add_space(pad);
                             let measurement_button_title: String = if state.measurement_identifier > 0 {
                                 "Reset Measurement".into()
@@ -170,10 +173,46 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
                                 }
                             }
                         });
-
-                        // 5px spacing above the button, separating it from the table
-                        ui.add_space(5.0);
+                        ui.add_space(3.0);
                     }
+
+                    // Control buttons (only in RealtimeTracking mode)
+                    if show_control_buttons {
+                        let button_tooltip = if control_available {
+                            ""
+                        } else {
+                            "Control not available. Add config.toml to the scene directory."
+                        };
+
+                        // Two control buttons side by side
+                        let half_button_w = ((button_w - 5.0) / 2.0).max(0.0);
+                        ui.horizontal(|ui| {
+                            ui.add_space(pad);
+                            ui.add_enabled_ui(control_available, |ui| {
+                                if ui
+                                    .add_sized([half_button_w, button_h], egui::Button::new("Set Log Level"))
+                                    .on_disabled_hover_text(button_tooltip)
+                                    .on_hover_text("Set log level and filter for this node")
+                                    .clicked()
+                                {
+                                    state.open_set_log_level_modal(Some(node_id));
+                                }
+                            });
+                            ui.add_enabled_ui(control_available, |ui| {
+                                if ui
+                                    .add_sized([half_button_w, button_h], egui::Button::new("Send Command"))
+                                    .on_disabled_hover_text(button_tooltip)
+                                    .on_hover_text("Send a custom command to this node")
+                                    .clicked()
+                                {
+                                    state.open_send_command_modal(Some(node_id));
+                                }
+                            });
+                        });
+                    }
+
+                    // 5px spacing above the buttons, separating from the table
+                    ui.add_space(5.0);
                 }
 
                 // Table area above buttons: fill whatever is left
