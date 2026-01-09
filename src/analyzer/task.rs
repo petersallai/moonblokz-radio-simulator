@@ -298,12 +298,7 @@ pub async fn analyzer_task(
 }
 
 /// Handle a UI command.
-fn handle_ui_command(
-    cmd: UICommand,
-    state: &AnalyzerState,
-    ui_refresh_tx: &UIRefreshQueueSender,
-    telemetry_client: &Option<Arc<TelemetryClient>>,
-) {
+fn handle_ui_command(cmd: UICommand, state: &AnalyzerState, ui_refresh_tx: &UIRefreshQueueSender, telemetry_client: &Option<Arc<TelemetryClient>>) {
     match cmd {
         UICommand::RequestNodeInfo(node_id) => {
             // Build NodeInfo from packet history
@@ -318,6 +313,18 @@ fn handle_ui_command(
                 }
             } else {
                 log::warn!("Control command received but no telemetry client available");
+            }
+        }
+        UICommand::StartMeasurement(node_id, sequence) => {
+            // Send start_measurement command to the Telemetry Hub
+            if let Some(client) = telemetry_client {
+                let control_cmd = ControlCommand::StartMeasurement { node_id, sequence };
+                match client.send_command(&control_cmd) {
+                    Ok(_) => log::info!("Start measurement command sent successfully for node {} with sequence {}", node_id, sequence),
+                    Err(e) => log::error!("Failed to send start measurement command: {}", e),
+                }
+            } else {
+                log::warn!("Start measurement command received but no telemetry client available");
             }
         }
         _ => {
@@ -374,7 +381,12 @@ async fn process_event(
     node_effective_distances: &HashMap<u32, u32>,
 ) {
     match event {
-        LogEvent::SendPacket { node_id, message_type, .. } => {
+        LogEvent::SendPacket {
+            node_id,
+            message_type,
+            sequence,
+            ..
+        } => {
             *total_sent += 1;
 
             // Store in history
@@ -385,6 +397,14 @@ async fn process_event(
                     event: event.clone(),
                 },
             );
+
+            if let Some(active_id) = state.active_measurement_id {
+                if let Some(seq) = sequence {
+                    if active_id == *seq {
+                        let _ = ui_refresh_tx.try_send(UIRefreshState::SendMessageInMeasurement(*seq)).ok();
+                    }
+                }
+            }
 
             // Notify UI of transmission using the node's effective distance
             let effective_distance = node_effective_distances.get(node_id).copied().unwrap_or(100);
@@ -423,23 +443,14 @@ async fn process_event(
             message_type,
             sequence,
             ..
-        } => {
-            // If this is an AddBlock message (type 6), it might be part of a measurement
-            if *message_type == 6 {
-                if let Some(active_id) = state.active_measurement_id {
-                    if active_id == *sequence {
-                        let _ = ui_refresh_tx.try_send(UIRefreshState::NodeReachedInMeasurement(*node_id, *sequence)).ok();
-                    }
-                }
-            }
-        }
+        } => {}
         LogEvent::AddBlockReceived {
             node_id,
             sender_id,
             sequence,
             length,
         } => {
-            // AddBlock fully received - check if part of active measurement
+            // If this is an AddBlock message (type 6), it might be part of a measurement
             if let Some(active_id) = state.active_measurement_id {
                 if active_id == *sequence {
                     let _ = ui_refresh_tx.try_send(UIRefreshState::NodeReachedInMeasurement(*node_id, *sequence)).ok();
@@ -523,8 +534,6 @@ async fn process_event(
 ///
 /// A `NodeInfo` struct with the node's message history.
 fn build_node_info(node_id: u32, state: &AnalyzerState) -> NodeInfo {
-    log::info!("Building NodeInfo for node {}", node_id);
-
     // Build radio packets from packet history
     let messages = if let Some(history) = state.node_packet_histories.get(&node_id) {
         history

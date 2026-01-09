@@ -148,14 +148,21 @@ fn extract_log_level(line: &str) -> LogLevel {
 /// Handles multiple timestamp formats:
 /// - Short: `2025-10-23T18:00:00Z` (20 chars)
 /// - Long:  `2026-01-06T09:14:34.900912254+00:00` (35 chars with nanoseconds)
+/// - Short with separator: `2026-01-09T17:53:55Z:...` (Z followed by colon)
 fn parse_timestamp(line: &str) -> Option<DateTime<Utc>> {
     if line.len() < 20 {
         return None;
     }
 
     // Try to find the end of the timestamp by looking for common delimiters
-    // Timestamps end before `:` followed by `[` (node ID) or before a space
-    let timestamp_end = line.find(":[").or_else(|| line.find(" ")).unwrap_or(line.len().min(35));
+    // Handle format "2026-01-09T17:53:55Z:..." where Z is followed by colon
+    // Also handle "timestamp:[node_id]" and "timestamp message" formats
+    let timestamp_end = line
+        .find("Z:")
+        .map(|p| p + 1) // Include the Z
+        .or_else(|| line.find(":["))
+        .or_else(|| line.find(" "))
+        .unwrap_or(line.len().min(35));
 
     let timestamp_str = &line[..timestamp_end];
     DateTime::parse_from_rfc3339(timestamp_str).ok().map(|dt| dt.with_timezone(&Utc))
@@ -222,8 +229,9 @@ fn parse_tm2(line: &str, node_id: u32) -> Option<LogEvent> {
 
 /// Parse *TM3* - Start measurement.
 fn parse_tm3(line: &str, node_id: u32) -> Option<LogEvent> {
+    log::info!("Parsing TM3 line: {}", line); // --- IGNORE ---
     let sequence = extract_field_u32(line, "sequence:")?;
-
+    log::info!("Extracted sequence: {}", sequence); // --- IGNORE ---
     Some(LogEvent::StartMeasurement { node_id, sequence })
 }
 

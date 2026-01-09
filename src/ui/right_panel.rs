@@ -154,9 +154,10 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
                             };
                             if ui.add_sized([button_w, button_h], egui::Button::new(measurement_button_title)).clicked() {
                                 if state.measurement_identifier == 0 {
-                                    state.measurement_identifier = max(rand::random::<u32>(), 1);
+                                    state.measurement_identifier = max(rand::random::<u32>() % 100000, 1);
                                     state.measurement_start_time = embassy_time::Instant::now();
                                     let _ = state.ui_command_tx.try_send(UICommand::StartMeasurement(node_id, state.measurement_identifier));
+                                    log::info!("Started measurement {} on node {}", state.measurement_identifier, node_id);
                                     state.reached_nodes.clear();
                                     state.reached_nodes.insert(node_id);
                                 } else {

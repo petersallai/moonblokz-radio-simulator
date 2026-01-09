@@ -95,7 +95,7 @@ pub enum UIRefreshState {
     /// The simulation speed percentage changed (e.g., via auto-speed control).
     SimulationSpeedChanged(u32),
     /// A message was sent during an active measurement. Parameter: sequence number.
-    SendMessageInSimulation(u32),
+    SendMessageInMeasurement(u32),
     /// Link quality thresholds from the scoring matrix. Parameters: poor limit, excellent limit.
     PoorAndExcellentLimits(u8, u8),
     SceneDimensionsUpdated(Point, Point, f64, f64),

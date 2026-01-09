@@ -426,7 +426,7 @@ async fn handle_radio_transfer(
     // Handle special message types for UI
     let sequence: Option<u32> = if packet.message_type() == MessageType::AddBlock as u8 {
         let seq = u32::from_le_bytes([packet.data[5], packet.data[6], packet.data[7], packet.data[8]]);
-        _ = ui_refresh_tx.try_send(UIRefreshState::SendMessageInSimulation(seq)).ok();
+        _ = ui_refresh_tx.try_send(UIRefreshState::SendMessageInMeasurement(seq)).ok();
         Some(seq)
     } else if packet.message_type() == MessageType::RequestBlockPart as u8 {
         // For RequestBlockPart, sequence is at the same offset as AddBlock

@@ -30,7 +30,7 @@ impl TelemetryClient {
         let url = format!("{}/command", self.config.hub_url);
         let payload = command.to_payload();
 
-        log::debug!("Sending command to {}: {:?}", url, payload);
+        log::info!("Sending command to {}: {:?}", url, payload);
 
         let response = self
             .client

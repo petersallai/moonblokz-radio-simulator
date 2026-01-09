@@ -120,7 +120,7 @@ impl ControlCommand {
                     params["node_id"] = serde_json::json!(id);
                 }
                 CommandPayload {
-                    command: "command".to_string(),
+                    command: "run_command".to_string(),
                     parameters: params,
                 }
             }

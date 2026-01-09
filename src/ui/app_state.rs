@@ -19,6 +19,7 @@
 //! rebuilt every frame. State is updated by consuming messages from the simulation
 //! and then rendered by delegating to specialized panel render functions.
 
+use chrono::TimeZone;
 use eframe::egui;
 use egui::Color32;
 use embassy_time::Duration;
@@ -105,8 +106,8 @@ impl Default for ControlModalState {
 
         Self {
             active_modal: None,
-            update_interval_active: String::new(),
-            update_interval_inactive: String::new(),
+            update_interval_active: "30".to_string(),
+            update_interval_inactive: "300".to_string(),
             update_interval_start_date: today,
             update_interval_start_time: current_time,
             update_interval_end_date: end_date,
@@ -756,17 +757,25 @@ impl AppState {
             return Err("Inactive interval must be a positive number".to_string());
         }
 
-        // Parse start time
+        // Parse start time (user enters local time, convert to UTC)
         let start_time_naive = chrono::NaiveTime::parse_from_str(&self.control_modal.update_interval_start_time, "%H:%M:%S")
             .map_err(|_| "Invalid start time format. Use HH:MM:SS".to_string())?;
         let start_datetime_naive = self.control_modal.update_interval_start_date.and_time(start_time_naive);
-        let start_time = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(start_datetime_naive, chrono::Utc);
+        let start_time = chrono::Local
+            .from_local_datetime(&start_datetime_naive)
+            .single()
+            .ok_or_else(|| "Ambiguous or invalid local start time".to_string())?
+            .with_timezone(&chrono::Utc);
 
-        // Parse end time
+        // Parse end time (user enters local time, convert to UTC)
         let end_time_naive = chrono::NaiveTime::parse_from_str(&self.control_modal.update_interval_end_time, "%H:%M:%S")
             .map_err(|_| "Invalid end time format. Use HH:MM:SS".to_string())?;
         let end_datetime_naive = self.control_modal.update_interval_end_date.and_time(end_time_naive);
-        let end_time = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(end_datetime_naive, chrono::Utc);
+        let end_time = chrono::Local
+            .from_local_datetime(&end_datetime_naive)
+            .single()
+            .ok_or_else(|| "Ambiguous or invalid local end time".to_string())?
+            .with_timezone(&chrono::Utc);
 
         // Validate end is after start
         if end_time <= start_time {
@@ -984,7 +993,7 @@ impl eframe::App for AppState {
                 UIRefreshState::SimulationSpeedChanged(new_speed) => {
                     self.speed_percent = new_speed;
                 }
-                UIRefreshState::SendMessageInSimulation(measurement_id) => {
+                UIRefreshState::SendMessageInMeasurement(measurement_id) => {
                     if self.measurement_identifier == measurement_id {
                         self.measurement_total_message_count += 1;
                         self.measurement_total_time = self.measurement_start_time.elapsed().as_secs();
