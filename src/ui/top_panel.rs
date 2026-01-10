@@ -369,7 +369,7 @@ fn render_controls(ui: &mut egui::Ui, state: &mut AppState) {
                         state.open_set_log_level_modal(None);
                     }
                     if ui
-                        .button("Send Command")
+                        .button("Node Command")
                         .on_disabled_hover_text(button_tooltip)
                         .on_hover_text("Send a custom command to all nodes")
                         .clicked()

@@ -201,7 +201,7 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
                             });
                             ui.add_enabled_ui(control_available, |ui| {
                                 if ui
-                                    .add_sized([half_button_w, button_h], egui::Button::new("Send Command"))
+                                    .add_sized([half_button_w, button_h], egui::Button::new("Node Command"))
                                     .on_disabled_hover_text(button_tooltip)
                                     .on_hover_text("Send a custom command to this node")
                                     .clicked()
