@@ -500,7 +500,7 @@ async fn process_event(
         } => {
             // Store version info for this node
             state.node_versions.insert(*node_id, (*probe_version, *node_version));
-            log::debug!("Node {} version info: probe={}, node={}", node_id, probe_version, node_version);
+            log::trace!("Node {} version info: probe={}, node={}", node_id, probe_version, node_version);
         }
         LogEvent::PacketCrcError { node_id, .. } => {
             // CRC errors are treated like collisions - store in packet history
@@ -512,7 +512,7 @@ async fn process_event(
                     event: event.clone(),
                 },
             );
-            log::debug!("Node {} received packet with CRC error", node_id);
+            log::trace!("Node {} received packet with CRC error", node_id);
         }
     }
 

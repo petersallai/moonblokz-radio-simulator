@@ -54,6 +54,7 @@ pub enum ControlModalType {
     SetUpdateInterval,
     SetLogLevel,
     SendCommand,
+    AutoAddBlock,
 }
 
 /// Modal dialog state for control commands.
@@ -86,6 +87,10 @@ pub struct ControlModalState {
     /// Arbitrary command text.
     pub command_text: String,
 
+    // Auto AddBlock modal field
+    /// Auto AddBlock send interval in seconds (text for input).
+    pub auto_addblock_interval: String,
+
     // Target node for per-node modals (None = all nodes)
     pub target_node_id: Option<u32>,
 
@@ -115,6 +120,7 @@ impl Default for ControlModalState {
             log_level: LogLevel::Info,
             log_filter: String::new(),
             command_text: String::new(),
+            auto_addblock_interval: "300".to_string(),
             target_node_id: None,
             validation_error: None,
         }
@@ -584,6 +590,13 @@ impl AppState {
                     "Send Command to All Nodes".to_string()
                 }
             }
+            ControlModalType::AutoAddBlock => {
+                if let Some(node_id) = self.control_modal.target_node_id {
+                    format!("Auto AddBlock Send for {}", node_id)
+                } else {
+                    "Auto AddBlock Send".to_string()
+                }
+            }
         };
 
         let mut close_modal = false;
@@ -665,6 +678,13 @@ impl AppState {
                                 ui.add(egui::TextEdit::singleline(&mut self.control_modal.command_text).desired_width(200.0));
                             });
                         }
+                        ControlModalType::AutoAddBlock => {
+                            ui.horizontal(|ui| {
+                                ui.label("Send Interval (in seconds):");
+                            });
+                            ui.add_space(4.0);
+                            ui.add(egui::TextEdit::singleline(&mut self.control_modal.auto_addblock_interval).desired_width(f32::INFINITY));
+                        }
                     }
 
                     // Validation error display
@@ -714,6 +734,18 @@ impl AppState {
                                             close_modal = true;
                                         }
                                     }
+                                    ControlModalType::AutoAddBlock => match self.validate_auto_addblock_interval() {
+                                        Ok(interval) => {
+                                            send_commands.push(crate::control::ControlCommand::RunCommand {
+                                                node_id: self.control_modal.target_node_id,
+                                                command: format!("/S_{}_", interval),
+                                            });
+                                            close_modal = true;
+                                        }
+                                        Err(e) => {
+                                            self.control_modal.validation_error = Some(e);
+                                        }
+                                    },
                                 }
                             }
                             if ui.button("Cancel").clicked() {
@@ -810,6 +842,32 @@ impl AppState {
         self.control_modal = ControlModalState::default();
         self.control_modal.active_modal = Some(ControlModalType::SendCommand);
         self.control_modal.target_node_id = node_id;
+    }
+
+    /// Open the Auto AddBlock modal for all nodes or a specific node.
+    pub fn open_auto_addblock_modal(&mut self, node_id: Option<u32>) {
+        self.control_modal = ControlModalState::default();
+        self.control_modal.active_modal = Some(ControlModalType::AutoAddBlock);
+        self.control_modal.target_node_id = node_id;
+    }
+
+    /// Validate the auto addblock interval input.
+    ///
+    /// # Returns
+    /// * `Ok(u32)` - The validated interval value
+    /// * `Err(String)` - A human-readable error message
+    fn validate_auto_addblock_interval(&self) -> Result<u32, String> {
+        let trimmed = self.control_modal.auto_addblock_interval.trim();
+
+        if trimmed.is_empty() {
+            return Err("Send interval is required".to_string());
+        }
+
+        match trimmed.parse::<i64>() {
+            Ok(value) if value >= 0 => Ok(value as u32),
+            Ok(_) => Err("Send interval must be 0 or a positive number".to_string()),
+            Err(_) => Err("Send interval must be a valid number".to_string()),
+        }
     }
 }
 

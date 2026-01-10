@@ -376,6 +376,14 @@ fn render_controls(ui: &mut egui::Ui, state: &mut AppState) {
                     {
                         state.open_send_command_modal(None);
                     }
+                    if ui
+                        .button("Auto AddBlock")
+                        .on_disabled_hover_text(button_tooltip)
+                        .on_hover_text("Configure automatic AddBlock sending interval for all nodes")
+                        .clicked()
+                    {
+                        state.open_auto_addblock_modal(None);
+                    }
                 });
             });
         }

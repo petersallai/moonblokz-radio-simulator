@@ -126,128 +126,187 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
                 ui.add_space(4.0);
             }
 
-            // Remaining area: bottom-up so buttons stick to the bottom and table fills above
+            // Remaining area: use bottom-up layout so buttons stick to the bottom
             let avail_w = ui.available_width();
+            let avail_h = ui.available_height();
             let button_h = ui.spacing().interact_size.y;
             let node_id = p.node_id; // Capture node_id before moving into closure
             let show_measurement_button = state.operating_mode != OperatingMode::LogVisualization;
             let show_control_buttons = state.operating_mode == OperatingMode::RealtimeTracking;
             let control_available = state.control_available;
-            ui.allocate_ui_with_layout(egui::vec2(avail_w, ui.available_height()), egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
-                // Bottom buttons, centered at 80% width
-                // Hide measurement button in log visualization mode
-                if let Some(_i) = state.selected {
-                    let button_w = (avail_w * 0.8).max(0.0);
-                    let pad = (avail_w - button_w).max(0.0) / 2.0;
+            
+            ui.allocate_ui_with_layout(
+                egui::vec2(avail_w, avail_h),
+                egui::Layout::bottom_up(egui::Align::Center),
+                |ui| {
+                    // In bottom_up layout, first items appear at the bottom
+                    
+                    // Bottom padding
+                    ui.add_space(8.0);
+                    
+                    // Button area at bottom
+                    if let Some(_i) = state.selected {
+                        let button_w = (avail_w * 0.8).max(0.0);
+                        let half_button_w = ((button_w - 6.0) / 2.0).max(0.0);
 
-                    // 20px padding at the very bottom under the last (bottom-most) button
-                    ui.add_space(20.0);
-
-                    // Measurement button (shown in Simulation and RealtimeTracking modes)
-                    if show_measurement_button {
-                        ui.horizontal(|ui| {
-                            ui.add_space(pad);
-                            let measurement_button_title: String = if state.measurement_identifier > 0 {
-                                "Reset Measurement".into()
+                        // Control buttons (only in RealtimeTracking mode)
+                        if show_control_buttons {
+                            let button_tooltip = if control_available {
+                                ""
                             } else {
-                                "Start Measurement".into()
+                                "Control not available. Add config.toml to the scene directory."
                             };
-                            if ui.add_sized([button_w, button_h], egui::Button::new(measurement_button_title)).clicked() {
-                                if state.measurement_identifier == 0 {
-                                    state.measurement_identifier = max(rand::random::<u32>() % 100000, 1);
-                                    state.measurement_start_time = embassy_time::Instant::now();
-                                    let _ = state.ui_command_tx.try_send(UICommand::StartMeasurement(node_id, state.measurement_identifier));
-                                    log::info!("Started measurement {} on node {}", state.measurement_identifier, node_id);
-                                    state.reached_nodes.clear();
-                                    state.reached_nodes.insert(node_id);
+
+                            // Row 2 (bottom row): Start Measurement, Auto AddBlock
+                            ui.horizontal(|ui| {
+                                let pad = (ui.available_width() - button_w).max(0.0) / 2.0;
+                                ui.add_space(pad);
+                                
+                                let measurement_button_title: String = if state.measurement_identifier > 0 {
+                                    "Reset Measurement".into()
                                 } else {
-                                    state.reached_nodes.clear();
-                                    state.measurement_identifier = 0;
-                                    state.measurement_50_time = 0;
-                                    state.measurement_90_time = 0;
-                                    state.measurement_100_time = 0;
-                                    state.measurement_total_time = 0;
-                                    state.measurement_total_message_count = 0;
-                                    state.measurement_50_message_count = 0;
-                                    state.measurement_90_message_count = 0;
-                                    state.measurement_100_message_count = 0;
+                                    "Start Measurement".into()
+                                };
+                                if ui.add_sized([half_button_w, button_h], egui::Button::new(measurement_button_title)).clicked() {
+                                    if state.measurement_identifier == 0 {
+                                        state.measurement_identifier = max(rand::random::<u32>() % 100000, 1);
+                                        state.measurement_start_time = embassy_time::Instant::now();
+                                        let _ = state.ui_command_tx.try_send(UICommand::StartMeasurement(node_id, state.measurement_identifier));
+                                        log::info!("Started measurement {} on node {}", state.measurement_identifier, node_id);
+                                        state.reached_nodes.clear();
+                                        state.reached_nodes.insert(node_id);
+                                    } else {
+                                        state.reached_nodes.clear();
+                                        state.measurement_identifier = 0;
+                                        state.measurement_50_time = 0;
+                                        state.measurement_90_time = 0;
+                                        state.measurement_100_time = 0;
+                                        state.measurement_total_time = 0;
+                                        state.measurement_total_message_count = 0;
+                                        state.measurement_50_message_count = 0;
+                                        state.measurement_90_message_count = 0;
+                                        state.measurement_100_message_count = 0;
+                                    }
                                 }
-                            }
-                        });
-                        ui.add_space(3.0);
-                    }
-
-                    // Control buttons (only in RealtimeTracking mode)
-                    if show_control_buttons {
-                        let button_tooltip = if control_available {
-                            ""
-                        } else {
-                            "Control not available. Add config.toml to the scene directory."
-                        };
-
-                        // Two control buttons side by side
-                        let half_button_w = ((button_w - 5.0) / 2.0).max(0.0);
-                        ui.horizontal(|ui| {
-                            ui.add_space(pad);
-                            ui.add_enabled_ui(control_available, |ui| {
-                                if ui
-                                    .add_sized([half_button_w, button_h], egui::Button::new("Set Log Level"))
-                                    .on_disabled_hover_text(button_tooltip)
-                                    .on_hover_text("Set log level and filter for this node")
-                                    .clicked()
-                                {
-                                    state.open_set_log_level_modal(Some(node_id));
+                                
+                                ui.add_space(6.0);
+                                
+                                ui.add_enabled_ui(control_available, |ui| {
+                                    if ui
+                                        .add_sized([half_button_w, button_h], egui::Button::new("Auto AddBlock"))
+                                        .on_disabled_hover_text(button_tooltip)
+                                        .on_hover_text("Configure automatic AddBlock sending interval for this node")
+                                        .clicked()
+                                    {
+                                        state.open_auto_addblock_modal(Some(node_id));
+                                    }
+                                });
+                            });
+                            
+                            ui.add_space(6.0);
+                            
+                            // Row 1 (top row): Set Log Level, Node Command
+                            ui.horizontal(|ui| {
+                                let pad = (ui.available_width() - button_w).max(0.0) / 2.0;
+                                ui.add_space(pad);
+                                
+                                ui.add_enabled_ui(control_available, |ui| {
+                                    if ui
+                                        .add_sized([half_button_w, button_h], egui::Button::new("Set Log Level"))
+                                        .on_disabled_hover_text(button_tooltip)
+                                        .on_hover_text("Set log level and filter for this node")
+                                        .clicked()
+                                    {
+                                        state.open_set_log_level_modal(Some(node_id));
+                                    }
+                                });
+                                
+                                ui.add_space(6.0);
+                                
+                                ui.add_enabled_ui(control_available, |ui| {
+                                    if ui
+                                        .add_sized([half_button_w, button_h], egui::Button::new("Node Command"))
+                                        .on_disabled_hover_text(button_tooltip)
+                                        .on_hover_text("Send a custom command to this node")
+                                        .clicked()
+                                    {
+                                        state.open_send_command_modal(Some(node_id));
+                                    }
+                                });
+                            });
+                        } else if show_measurement_button {
+                            // For Simulation mode (no control buttons), just show measurement button
+                            ui.horizontal(|ui| {
+                                let pad = (ui.available_width() - button_w).max(0.0) / 2.0;
+                                ui.add_space(pad);
+                                let measurement_button_title: String = if state.measurement_identifier > 0 {
+                                    "Reset Measurement".into()
+                                } else {
+                                    "Start Measurement".into()
+                                };
+                                if ui.add_sized([button_w, button_h], egui::Button::new(measurement_button_title)).clicked() {
+                                    if state.measurement_identifier == 0 {
+                                        state.measurement_identifier = max(rand::random::<u32>() % 100000, 1);
+                                        state.measurement_start_time = embassy_time::Instant::now();
+                                        let _ = state.ui_command_tx.try_send(UICommand::StartMeasurement(node_id, state.measurement_identifier));
+                                        log::info!("Started measurement {} on node {}", state.measurement_identifier, node_id);
+                                        state.reached_nodes.clear();
+                                        state.reached_nodes.insert(node_id);
+                                    } else {
+                                        state.reached_nodes.clear();
+                                        state.measurement_identifier = 0;
+                                        state.measurement_50_time = 0;
+                                        state.measurement_90_time = 0;
+                                        state.measurement_100_time = 0;
+                                        state.measurement_total_time = 0;
+                                        state.measurement_total_message_count = 0;
+                                        state.measurement_50_message_count = 0;
+                                        state.measurement_90_message_count = 0;
+                                        state.measurement_100_message_count = 0;
+                                    }
                                 }
                             });
-                            ui.add_enabled_ui(control_available, |ui| {
-                                if ui
-                                    .add_sized([half_button_w, button_h], egui::Button::new("Node Command"))
-                                    .on_disabled_hover_text(button_tooltip)
-                                    .on_hover_text("Send a custom command to this node")
-                                    .clicked()
-                                {
-                                    state.open_send_command_modal(Some(node_id));
-                                }
-                            });
-                        });
-                    }
-
-                    // 5px spacing above the buttons, separating from the table
-                    ui.add_space(5.0);
-                }
-
-                // Table area above buttons: fill whatever is left
-                let table_h = ui.available_height().max(0.0);
-                if table_h > 0.0 {
-                    // Check if we have matching node_info before entering the layout
-                    let has_matching_node_info = state.node_info.as_ref().map_or(false, |ni| ni.node_id == node_id);
-                    let current_tab = state.inspector_tab;
-
-                    ui.allocate_ui_with_layout(egui::vec2(avail_w, table_h), egui::Layout::top_down(egui::Align::LEFT), |ui| {
-                        if has_matching_node_info {
-                            match current_tab {
-                                InspectorTab::RadioStream => {
-                                    if let Some(node_info) = &state.node_info {
-                                        render_radio_stream_table(ui, state, node_info);
-                                    }
-                                }
-                                InspectorTab::MessageStream => {
-                                    if let Some(node_info) = &state.node_info {
-                                        render_message_stream_table(ui, state, node_info);
-                                    }
-                                }
-                                InspectorTab::LogStream => {
-                                    // Clone log_lines to avoid borrow conflict with mutable state
-                                    let log_lines = state.node_info.as_ref().map(|ni| ni.log_lines.clone());
-                                    if let Some(log_lines) = log_lines {
-                                        render_log_stream(ui, state, &log_lines);
-                                    }
-                                }
-                            }
                         }
-                    });
-                }
-            });
+
+                        // Spacing between buttons and table
+                        ui.add_space(8.0);
+                    }
+
+                    // Table area fills remaining space above buttons
+                    let table_h = ui.available_height().max(0.0);
+                    if table_h > 0.0 {
+                        let has_matching_node_info = state.node_info.as_ref().map_or(false, |ni| ni.node_id == node_id);
+                        let current_tab = state.inspector_tab;
+
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(avail_w, table_h),
+                            egui::Layout::top_down(egui::Align::LEFT),
+                            |ui| {
+                                if has_matching_node_info {
+                                    match current_tab {
+                                        InspectorTab::RadioStream => {
+                                            if let Some(node_info) = &state.node_info {
+                                                render_radio_stream_table(ui, state, node_info);
+                                            }
+                                        }
+                                        InspectorTab::MessageStream => {
+                                            if let Some(node_info) = &state.node_info {
+                                                render_message_stream_table(ui, state, node_info);
+                                            }
+                                        }
+                                        InspectorTab::LogStream => {
+                                            let log_lines = state.node_info.as_ref().map(|ni| ni.log_lines.clone());
+                                            if let Some(log_lines) = log_lines {
+                                                render_log_stream(ui, state, &log_lines);
+                                            }
+                                        }
+                                    }
+                                }
+                            },
+                        );
+                    }
+                },
+            );
         } else {
             // Center the info label both horizontally and vertically within the remaining panel space
             ui.centered_and_justified(|ui| {
