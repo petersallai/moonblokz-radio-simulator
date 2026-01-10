@@ -835,6 +835,11 @@ impl AppState {
         self.control_modal = ControlModalState::default();
         self.control_modal.active_modal = Some(ControlModalType::SetLogLevel);
         self.control_modal.target_node_id = node_id;
+        // In real-time tracking mode, use Debug level and *TM filter as defaults
+        if self.operating_mode == OperatingMode::RealtimeTracking {
+            self.control_modal.log_level = LogLevel::Debug;
+            self.control_modal.log_filter = "*TM".to_string();
+        }
     }
 
     /// Open the Send Command modal for all nodes or a specific node.
