@@ -607,7 +607,7 @@ impl AppState {
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
-                egui::Frame::none().inner_margin(egui::Margin::same(10.0)).show(ui, |ui| {
+                egui::Frame::none().inner_margin(egui::Margin::same(10)).show(ui, |ui| {
                     match modal_type {
                         ControlModalType::SetUpdateInterval => {
                             ui.heading("Interval Settings");

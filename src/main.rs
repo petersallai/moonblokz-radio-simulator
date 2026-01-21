@@ -229,6 +229,6 @@ fn main() {
     let _ = eframe::run_native(
         "MoonBlokz Radio Simulator/Analyzer",
         native_options,
-        Box::new(move |cc| Box::new(ui::AppState::new(ui_refresh_rx, ui_command_tx, cc.storage))),
+        Box::new(move |cc| Ok::<_, Box<dyn std::error::Error + Send + Sync>>(Box::new(ui::AppState::new(ui_refresh_rx, ui_command_tx, cc.storage)))),
     );
 }

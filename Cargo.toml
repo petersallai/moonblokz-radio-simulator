@@ -4,9 +4,9 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-eframe = { version = "0.27", default-features = false, features = ["wgpu","persistence"] }
-egui = { version = "0.27", features = ["default_fonts"] }
-egui_extras = { version = "0.27", features = ["image", "datepicker"] }
+eframe = { version = "0.32", default-features = true, features = ["wgpu","persistence"] }
+egui = { version = "0.32", features = ["default_fonts","persistence"] }
+egui_extras = { version = "0.32", features = ["image", "datepicker","serde"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 
 

@@ -210,7 +210,7 @@ fn draw_obstacles(painter: &egui::Painter, rect: egui::Rect, state: &AppState) {
                 let bottom = egui::lerp(rect.top()..=rect.bottom(), ((b - world_min_y) / world_height) as f32);
                 let rect_px = egui::Rect::from_min_max(egui::pos2(left.min(right), top.min(bottom)), egui::pos2(left.max(right), top.max(bottom)));
                 painter.rect_filled(rect_px, 0.0, obstacle_fill);
-                painter.rect_stroke(rect_px, 0.0, obstacle_stroke);
+                painter.rect_stroke(rect_px, 0.0, obstacle_stroke, egui::StrokeKind::Middle);
             }
             Obstacle::Circle { position, .. } => {
                 let cx = egui::lerp(rect.left()..=rect.right(), ((position.center.x - world_min_x) / world_width) as f32);
@@ -386,7 +386,7 @@ fn draw_radio_range(painter: &egui::Painter, rect: egui::Rect, selected_node: &c
     let pixels_per_meter_y = rect.height() / state.height as f32;
     let avg_pixels_per_meter = (pixels_per_meter_x + pixels_per_meter_y) / 2.0;
     let radius = selected_node.radio_strength as f32 * avg_pixels_per_meter;
-    painter.circle_filled(pos, radius, Color32::from_rgba_unmultiplied(0, 255, 0, 5));
+    painter.circle_filled(pos, radius, Color32::from_rgba_unmultiplied(0, 255, 0, 50));
     painter.circle_stroke(pos, radius, egui::Stroke::new(2.0, Color32::from_rgba_unmultiplied(0, 255, 0, 100)));
 }
 
