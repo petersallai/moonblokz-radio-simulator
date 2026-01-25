@@ -350,9 +350,6 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
 fn render_radio_stream_table(ui: &mut egui::Ui, state: &AppState, node_info: &crate::ui::NodeInfo) {
     use egui_extras::{Column, TableBuilder};
 
-    let avail_w = ui.available_width();
-    ui.set_min_width(avail_w);
-
     let row_height = ui.text_style_height(&egui::TextStyle::Body) * 1.3;
     TableBuilder::new(ui)
         .striped(true)
@@ -555,9 +552,6 @@ fn render_message_stream_table(
 ) {
     use egui_extras::{Column, TableBuilder};
 
-    let avail_w = ui.available_width();
-    ui.set_min_width(avail_w);
-
     let row_height = ui.text_style_height(&egui::TextStyle::Body) * 1.3;
 
     TableBuilder::new(ui)
@@ -658,9 +652,6 @@ fn render_log_stream(
     log_lines: &[crate::simulation::types::LogLine],
 ) {
     use egui_extras::{Column, TableBuilder};
-
-    let avail_w = ui.available_width();
-    ui.set_min_width(avail_w);
 
     // Filter input field at the top
     ui.horizontal(|ui| {
@@ -812,9 +803,6 @@ fn render_connection_matrix_table(
 ) {
     use egui_extras::{Column, TableBuilder};
 
-    let avail_w = ui.available_width();
-    ui.set_min_width(avail_w);
-
     let node_count = matrix.node_ids.len();
     if node_count == 0 {
         ui.label("Empty connection matrix.");
@@ -845,10 +833,12 @@ fn render_connection_matrix_table(
 
     TableBuilder::new(ui)
         .striped(true)
+        .vscroll(true)
+        .min_scrolled_height(100.0)
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
         .column(Column::auto().resizable(true))
         .column(Column::auto().resizable(true))
-        .column(Column::auto().resizable(true))
+        .column(Column::remainder().clip(true))
         .header(20.0, |mut header| {
             header.col(|ui| {
                 ui.label(egui::RichText::new("Sender node").strong());

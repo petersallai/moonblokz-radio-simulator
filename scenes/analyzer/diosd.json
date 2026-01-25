@@ -15,6 +15,6 @@
   "width": 3859,
   "height": 3300,
   "background_image": "background.png",
-  "link_quality_weak_threshold": 55,
-  "link_quality_excellent_threshold": 58
+  "link_quality_weak_threshold": 30,
+  "link_quality_excellent_threshold": 50
 }
