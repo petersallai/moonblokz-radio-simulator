@@ -90,7 +90,14 @@ pub fn parse_raw_log_line(line: &str) -> Option<(u32, RawLogLine)> {
     // Determine log level from content or default to Info
     let level = extract_log_level(line);
 
-    Some((node_id, RawLogLine { timestamp, content, level }))
+    Some((
+        node_id,
+        RawLogLine {
+            timestamp,
+            content,
+            level,
+        },
+    ))
 }
 
 /// Extract node ID and its ending position from a [xxxx] pattern in the line.
@@ -127,15 +134,35 @@ fn extract_log_level(line: &str) -> LogLevel {
     // - "Z LEVEL " (simulator format after timestamp)
     // - ":[LEVEL]" (real device format with brackets)
     // - " LEVEL " or "LEVEL:" (generic patterns)
-    if upper.contains(" ERROR ") || upper.contains("Z ERROR ") || upper.contains(":[ERROR]") || upper.contains("ERROR:") {
+    if upper.contains(" ERROR ")
+        || upper.contains("Z ERROR ")
+        || upper.contains(":[ERROR]")
+        || upper.contains("ERROR:")
+    {
         LogLevel::Error
-    } else if upper.contains(" WARN ") || upper.contains("Z WARN ") || upper.contains(":[WARN]") || upper.contains("WARN:") {
+    } else if upper.contains(" WARN ")
+        || upper.contains("Z WARN ")
+        || upper.contains(":[WARN]")
+        || upper.contains("WARN:")
+    {
         LogLevel::Warn
-    } else if upper.contains(" DEBUG ") || upper.contains("Z DEBUG ") || upper.contains(":[DEBUG]") || upper.contains("DEBUG:") {
+    } else if upper.contains(" DEBUG ")
+        || upper.contains("Z DEBUG ")
+        || upper.contains(":[DEBUG]")
+        || upper.contains("DEBUG:")
+    {
         LogLevel::Debug
-    } else if upper.contains(" TRACE ") || upper.contains("Z TRACE ") || upper.contains(":[TRACE]") || upper.contains("TRACE:") {
+    } else if upper.contains(" TRACE ")
+        || upper.contains("Z TRACE ")
+        || upper.contains(":[TRACE]")
+        || upper.contains("TRACE:")
+    {
         LogLevel::Trace
-    } else if upper.contains(" INFO ") || upper.contains("Z INFO ") || upper.contains(":[INFO]") || upper.contains("INFO:") {
+    } else if upper.contains(" INFO ")
+        || upper.contains("Z INFO ")
+        || upper.contains(":[INFO]")
+        || upper.contains("INFO:")
+    {
         LogLevel::Info
     } else {
         // Default to Info for lines without explicit level
@@ -157,15 +184,24 @@ fn parse_timestamp(line: &str) -> Option<DateTime<Utc>> {
     // Try to find the end of the timestamp by looking for common delimiters
     // Handle format "2026-01-09T17:53:55Z:..." where Z is followed by colon
     // Also handle "timestamp:[node_id]" and "timestamp message" formats
-    let timestamp_end = line
-        .find("Z:")
-        .map(|p| p + 1) // Include the Z
-        .or_else(|| line.find(":["))
-        .or_else(|| line.find(" "))
+    let z_colon = line.find("Z:").map(|p| p + 1);
+    let space_pos = line.find(' ');
+    let colon_bracket = line.find(":[");
+
+    let timestamp_end = z_colon
+        .or_else(|| match (space_pos, colon_bracket) {
+            (Some(space), Some(cb)) if space < cb => Some(space),
+            (Some(space), None) => Some(space),
+            (None, Some(cb)) => Some(cb),
+            (Some(space), Some(_)) => Some(space),
+            (None, None) => None,
+        })
         .unwrap_or(line.len().min(35));
 
     let timestamp_str = &line[..timestamp_end];
-    DateTime::parse_from_rfc3339(timestamp_str).ok().map(|dt| dt.with_timezone(&Utc))
+    DateTime::parse_from_rfc3339(timestamp_str)
+        .ok()
+        .map(|dt| dt.with_timezone(&Utc))
 }
 
 /// Extract node ID from a [xxxx] pattern in the line.
@@ -260,7 +296,10 @@ fn parse_tm4(line: &str, node_id: u32) -> Option<LogEvent> {
 fn parse_tm5(line: &str, node_id: u32) -> Option<LogEvent> {
     let link_quality = extract_field_u8(line, "link quality:").unwrap_or(0);
 
-    Some(LogEvent::PacketCrcError { node_id, link_quality })
+    Some(LogEvent::PacketCrcError {
+        node_id,
+        link_quality,
+    })
 }
 
 /// Parse *TM6* - AddBlock message fully received.
@@ -487,7 +526,11 @@ mod tests {
         assert!(result.is_some());
 
         let (_, event) = result.unwrap();
-        if let LogEvent::PacketCrcError { node_id, link_quality } = event {
+        if let LogEvent::PacketCrcError {
+            node_id,
+            link_quality,
+        } = event
+        {
             assert_eq!(node_id, 3094);
             assert_eq!(link_quality, 15);
         } else {

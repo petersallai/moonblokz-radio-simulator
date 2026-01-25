@@ -156,11 +156,17 @@ fn segment_intersects_rect(p1: &Point, p2: &Point, rect: &RectPos) -> bool {
     let (left, right, top, bottom) = rect_bounds(rect);
     let lt = Point { x: left, y: top };
     let rt = Point { x: right, y: top };
-    let rb = Point { x: right, y: bottom };
+    let rb = Point {
+        x: right,
+        y: bottom,
+    };
     let lb = Point { x: left, y: bottom };
 
     // Check segment against each rectangle edge
-    segments_intersect(p1, p2, &lt, &rt) || segments_intersect(p1, p2, &rt, &rb) || segments_intersect(p1, p2, &rb, &lb) || segments_intersect(p1, p2, &lb, &lt)
+    segments_intersect(p1, p2, &lt, &rt)
+        || segments_intersect(p1, p2, &rt, &rb)
+        || segments_intersect(p1, p2, &rb, &lb)
+        || segments_intersect(p1, p2, &lb, &lt)
 }
 
 /// Segment vs. circle intersection using projection and clamped parameter t.
@@ -248,7 +254,10 @@ pub fn segments_intersect(p1: &Point, q1: &Point, p2: &Point, q2: &Point) -> boo
         return true; // Proper intersection
     }
     // Special cases: collinear and overlapping endpoints
-    (o1 == 0 && on_segment(p1, p2, q1)) || (o2 == 0 && on_segment(p1, q2, q1)) || (o3 == 0 && on_segment(p2, p1, q2)) || (o4 == 0 && on_segment(p2, q1, q2))
+    (o1 == 0 && on_segment(p1, p2, q1))
+        || (o2 == 0 && on_segment(p1, q2, q1))
+        || (o3 == 0 && on_segment(p2, p1, q2))
+        || (o4 == 0 && on_segment(p2, q1, q2))
 }
 
 #[cfg(test)]

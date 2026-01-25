@@ -26,11 +26,13 @@
 //! the right panel inspector with that node's message history.
 
 use crate::simulation::Obstacle;
+use crate::ui::app_state::InspectorTab;
 use crate::ui::app_state::{NODE_RADIO_TRANSFER_INDICATOR_TIMEOUT, color_for_message_type};
 use crate::ui::{AppState, UICommand};
 use eframe::egui;
 use egui::Color32;
 use embassy_time::{Duration, Instant};
+use std::collections::HashMap;
 
 /// Render the central map panel showing the simulation world.
 ///
@@ -96,6 +98,11 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
         // Draw obstacles before nodes so nodes appear on top
         draw_obstacles(&painter, rect, state);
 
+        // Draw connection matrix links (if active) before nodes
+        if state.inspector_tab == InspectorTab::ConnectionMatrix {
+            draw_connection_matrix_links(&painter, rect, state);
+        }
+
         // Draw nodes scaled into rect
         draw_nodes(&painter, rect, state, ui);
 
@@ -154,7 +161,13 @@ fn draw_grid(painter: &egui::Painter, rect: egui::Rect, state: &AppState) {
     while x <= x_end {
         let t = ((x - world_min_x).abs() / world_width) as f32;
         let screen_x = egui::lerp(rect.left()..=rect.right(), t);
-        painter.line_segment([egui::pos2(screen_x, rect.top()), egui::pos2(screen_x, rect.bottom())], grid_stroke);
+        painter.line_segment(
+            [
+                egui::pos2(screen_x, rect.top()),
+                egui::pos2(screen_x, rect.bottom()),
+            ],
+            grid_stroke,
+        );
         x += grid_spacing_x;
     }
 
@@ -169,7 +182,13 @@ fn draw_grid(painter: &egui::Painter, rect: egui::Rect, state: &AppState) {
     while y <= y_end {
         let t = ((y - world_min_y).abs() / world_height) as f32;
         let screen_y = egui::lerp(rect.top()..=rect.bottom(), t);
-        painter.line_segment([egui::pos2(rect.left(), screen_y), egui::pos2(rect.right(), screen_y)], grid_stroke);
+        painter.line_segment(
+            [
+                egui::pos2(rect.left(), screen_y),
+                egui::pos2(rect.right(), screen_y),
+            ],
+            grid_stroke,
+        );
         y += grid_spacing_y;
     }
 }
@@ -204,17 +223,38 @@ fn draw_obstacles(painter: &egui::Painter, rect: egui::Rect, state: &AppState) {
                 let b = position.top_left.y.max(position.bottom_right.y);
 
                 // Map world coordinates to rect coordinates
-                let left = egui::lerp(rect.left()..=rect.right(), ((l - world_min_x) / world_width) as f32);
-                let right = egui::lerp(rect.left()..=rect.right(), ((r - world_min_x) / world_width) as f32);
-                let top = egui::lerp(rect.top()..=rect.bottom(), ((t - world_min_y) / world_height) as f32);
-                let bottom = egui::lerp(rect.top()..=rect.bottom(), ((b - world_min_y) / world_height) as f32);
-                let rect_px = egui::Rect::from_min_max(egui::pos2(left.min(right), top.min(bottom)), egui::pos2(left.max(right), top.max(bottom)));
+                let left = egui::lerp(
+                    rect.left()..=rect.right(),
+                    ((l - world_min_x) / world_width) as f32,
+                );
+                let right = egui::lerp(
+                    rect.left()..=rect.right(),
+                    ((r - world_min_x) / world_width) as f32,
+                );
+                let top = egui::lerp(
+                    rect.top()..=rect.bottom(),
+                    ((t - world_min_y) / world_height) as f32,
+                );
+                let bottom = egui::lerp(
+                    rect.top()..=rect.bottom(),
+                    ((b - world_min_y) / world_height) as f32,
+                );
+                let rect_px = egui::Rect::from_min_max(
+                    egui::pos2(left.min(right), top.min(bottom)),
+                    egui::pos2(left.max(right), top.max(bottom)),
+                );
                 painter.rect_filled(rect_px, 0.0, obstacle_fill);
                 painter.rect_stroke(rect_px, 0.0, obstacle_stroke, egui::StrokeKind::Middle);
             }
             Obstacle::Circle { position, .. } => {
-                let cx = egui::lerp(rect.left()..=rect.right(), ((position.center.x - world_min_x) / world_width) as f32);
-                let cy = egui::lerp(rect.top()..=rect.bottom(), ((position.center.y - world_min_y) / world_height) as f32);
+                let cx = egui::lerp(
+                    rect.left()..=rect.right(),
+                    ((position.center.x - world_min_x) / world_width) as f32,
+                );
+                let cy = egui::lerp(
+                    rect.top()..=rect.bottom(),
+                    ((position.center.y - world_min_y) / world_height) as f32,
+                );
 
                 // Radius is in meters, convert to pixels:
                 // meters_to_pixels = meters * (pixels / meters)
@@ -229,6 +269,121 @@ fn draw_obstacles(painter: &egui::Painter, rect: egui::Rect, state: &AppState) {
                 painter.circle_filled(center_px, r, obstacle_fill);
                 painter.circle_stroke(center_px, r, obstacle_stroke);
             }
+        }
+    }
+}
+
+/// Draw connection matrix links on the map when the tab is active.
+fn draw_connection_matrix_links(painter: &egui::Painter, rect: egui::Rect, state: &AppState) {
+    let selected_id = state
+        .selected
+        .and_then(|idx| state.nodes.get(idx))
+        .map(|n| n.node_id);
+    let Some(selected_id) = selected_id else {
+        return;
+    };
+    let matrix = match state.connection_matrices.get(&selected_id) {
+        Some(m) => m,
+        None => return,
+    };
+
+    let world_min_x = state.world_top_left.x;
+    let world_max_x = state.world_bottom_right.x;
+    let world_min_y = state.world_top_left.y;
+    let world_max_y = state.world_bottom_right.y;
+    let world_width = world_max_x - world_min_x;
+    let world_height = world_max_y - world_min_y;
+
+    let mut positions: HashMap<u32, egui::Pos2> = HashMap::new();
+    for p in &state.nodes {
+        let pos = egui::pos2(
+            egui::lerp(
+                rect.left()..=rect.right(),
+                ((p.position.x - world_min_x) / world_width) as f32,
+            ),
+            egui::lerp(
+                rect.top()..=rect.bottom(),
+                ((p.position.y - world_min_y) / world_height) as f32,
+            ),
+        );
+        positions.insert(p.node_id, pos);
+    }
+
+    let node_count = matrix.node_ids.len();
+    if node_count == 0 {
+        return;
+    }
+
+    let color_for_quality = |value: u8| -> Color32 {
+        if state.poor_limit > 0
+            && state.excellent_limit > 0
+            && state.poor_limit < state.excellent_limit
+        {
+            if value <= state.poor_limit {
+                Color32::RED
+            } else if value >= state.excellent_limit {
+                Color32::GREEN
+            } else {
+                Color32::YELLOW
+            }
+        } else {
+            Color32::from_rgb(180, 180, 180)
+        }
+    };
+
+    // Forward pass: sender < receiver, thicker lines
+    for r in 0..node_count {
+        for c in 0..node_count {
+            let sender = matrix.node_ids[r];
+            let receiver = matrix.node_ids[c];
+            if sender >= receiver {
+                continue;
+            }
+            let Some(start) = positions.get(&sender) else {
+                continue;
+            };
+            let Some(end) = positions.get(&receiver) else {
+                continue;
+            };
+            let lq = matrix
+                .values
+                .get(r)
+                .and_then(|row| row.get(c))
+                .copied()
+                .unwrap_or(0);
+            if lq == 0 {
+                continue;
+            }
+            let color = color_for_quality(lq);
+            painter.line_segment([*start, *end], egui::Stroke::new(2.0, color));
+        }
+    }
+
+    // Backward pass: sender > receiver, thinner lines
+    for r in 0..node_count {
+        for c in 0..node_count {
+            let sender = matrix.node_ids[r];
+            let receiver = matrix.node_ids[c];
+            if sender <= receiver {
+                continue;
+            }
+            let Some(start) = positions.get(&sender) else {
+                continue;
+            };
+            let Some(end) = positions.get(&receiver) else {
+                continue;
+            };
+            let lq = matrix
+                .values
+                .get(r)
+                .and_then(|row| row.get(c))
+                .copied()
+                .unwrap_or(0);
+            if lq == 0 {
+                continue;
+            }
+            let color = color_for_quality(lq);
+            painter.line_segment([*start, *end], egui::Stroke::new(1.0, color));
         }
     }
 }
@@ -270,8 +425,14 @@ fn draw_nodes(painter: &egui::Painter, rect: egui::Rect, state: &mut AppState, u
 
     for (idx, p) in state.nodes.iter().enumerate() {
         let pos = egui::pos2(
-            egui::lerp(rect.left()..=rect.right(), ((p.position.x - world_min_x) / world_width) as f32),
-            egui::lerp(rect.top()..=rect.bottom(), ((p.position.y - world_min_y) / world_height) as f32),
+            egui::lerp(
+                rect.left()..=rect.right(),
+                ((p.position.x - world_min_x) / world_width) as f32,
+            ),
+            egui::lerp(
+                rect.top()..=rect.bottom(),
+                ((p.position.y - world_min_y) / world_height) as f32,
+            ),
         );
 
         let is_selected = state.selected == Some(idx);
@@ -305,7 +466,10 @@ fn draw_nodes(painter: &egui::Painter, rect: egui::Rect, state: &mut AppState, u
 
             let label_pos = egui::pos2(pos.x + 4.0, pos.y - 4.0);
             let rect_min = egui::pos2(label_pos.x, label_pos.y - text_size.y - padding.y);
-            let rect_max = egui::pos2(label_pos.x + text_size.x + padding.x * 2.0, label_pos.y + padding.y);
+            let rect_max = egui::pos2(
+                label_pos.x + text_size.x + padding.x * 2.0,
+                label_pos.y + padding.y,
+            );
             let label_rect = egui::Rect::from_min_max(rect_min, rect_max);
 
             // Draw background rectangle
@@ -339,13 +503,23 @@ fn draw_nodes(painter: &egui::Painter, rect: egui::Rect, state: &mut AppState, u
 /// * `state` - Application state (for indicator data)
 /// * `pos` - Screen position of the transmitting node
 /// * `node_id` - ID of the node to check for active indicators
-fn draw_radio_indicator(painter: &egui::Painter, rect: egui::Rect, state: &AppState, pos: &egui::Pos2, node_id: u32) {
-    if let Some((expiry, message_type, distance)) = state.node_radio_transfer_indicators.get(&node_id) {
+fn draw_radio_indicator(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    state: &AppState,
+    pos: &egui::Pos2,
+    node_id: u32,
+) {
+    if let Some((expiry, message_type, distance)) =
+        state.node_radio_transfer_indicators.get(&node_id)
+    {
         let now = Instant::now();
         if *expiry > now {
             let remaining = *expiry - now;
             if remaining > Duration::from_millis(0) {
-                let alpha = (remaining.as_millis() as f32 / NODE_RADIO_TRANSFER_INDICATOR_TIMEOUT as f32).clamp(0.0, 1.0);
+                let alpha = (remaining.as_millis() as f32
+                    / NODE_RADIO_TRANSFER_INDICATOR_TIMEOUT as f32)
+                    .clamp(0.0, 1.0);
                 // Distance is in meters, convert to pixels
                 let pixels_per_meter_x = rect.width() / state.width as f32;
                 let pixels_per_meter_y = rect.height() / state.height as f32;
@@ -368,7 +542,12 @@ fn draw_radio_indicator(painter: &egui::Painter, rect: egui::Rect, state: &AppSt
 /// * `painter` - egui painter
 /// * `rect` - Screen-space map rectangle
 /// * `selected_node` - The currently selected node
-fn draw_radio_range(painter: &egui::Painter, rect: egui::Rect, selected_node: &crate::ui::NodeUIState, state: &AppState) {
+fn draw_radio_range(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    selected_node: &crate::ui::NodeUIState,
+    state: &AppState,
+) {
     let world_min_x = state.world_top_left.x;
     let world_max_x = state.world_bottom_right.x;
     let world_min_y = state.world_top_left.y;
@@ -377,8 +556,14 @@ fn draw_radio_range(painter: &egui::Painter, rect: egui::Rect, selected_node: &c
     let world_height = world_max_y - world_min_y;
 
     let pos = egui::pos2(
-        egui::lerp(rect.left()..=rect.right(), ((selected_node.position.x - world_min_x) / world_width) as f32),
-        egui::lerp(rect.top()..=rect.bottom(), ((selected_node.position.y - world_min_y) / world_height) as f32),
+        egui::lerp(
+            rect.left()..=rect.right(),
+            ((selected_node.position.x - world_min_x) / world_width) as f32,
+        ),
+        egui::lerp(
+            rect.top()..=rect.bottom(),
+            ((selected_node.position.y - world_min_y) / world_height) as f32,
+        ),
     );
 
     // Radio strength is in meters, convert to pixels
@@ -387,7 +572,11 @@ fn draw_radio_range(painter: &egui::Painter, rect: egui::Rect, selected_node: &c
     let avg_pixels_per_meter = (pixels_per_meter_x + pixels_per_meter_y) / 2.0;
     let radius = selected_node.radio_strength as f32 * avg_pixels_per_meter;
     painter.circle_filled(pos, radius, Color32::from_rgba_unmultiplied(0, 255, 0, 50));
-    painter.circle_stroke(pos, radius, egui::Stroke::new(2.0, Color32::from_rgba_unmultiplied(0, 255, 0, 100)));
+    painter.circle_stroke(
+        pos,
+        radius,
+        egui::Stroke::new(2.0, Color32::from_rgba_unmultiplied(0, 255, 0, 100)),
+    );
 }
 
 /// Handle mouse clicks on the map for node selection.
@@ -414,8 +603,14 @@ fn handle_node_selection(response: &egui::Response, rect: egui::Rect, state: &mu
             let mut best: Option<(usize, f32)> = None;
             for (i, p) in state.nodes.iter().enumerate() {
                 let pos = egui::pos2(
-                    egui::lerp(rect.left()..=rect.right(), ((p.position.x - world_min_x) / world_width) as f32),
-                    egui::lerp(rect.top()..=rect.bottom(), ((p.position.y - world_min_y) / world_height) as f32),
+                    egui::lerp(
+                        rect.left()..=rect.right(),
+                        ((p.position.x - world_min_x) / world_width) as f32,
+                    ),
+                    egui::lerp(
+                        rect.top()..=rect.bottom(),
+                        ((p.position.y - world_min_y) / world_height) as f32,
+                    ),
                 );
                 let d2 = pos.distance_sq(click_pos);
                 if best.map_or(true, |(_, bd)| d2 < bd) {
@@ -427,7 +622,10 @@ fn handle_node_selection(response: &egui::Response, rect: egui::Rect, state: &mu
                 state.selected = new_selected;
                 if let Some(new_selected) = new_selected {
                     let node_id = &state.nodes[new_selected].node_id;
-                    state.ui_command_tx.try_send(UICommand::RequestNodeInfo(node_id.clone())).ok();
+                    state
+                        .ui_command_tx
+                        .try_send(UICommand::RequestNodeInfo(node_id.clone()))
+                        .ok();
                 }
             } else {
                 state.selected = None;

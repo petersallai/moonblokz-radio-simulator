@@ -17,6 +17,7 @@ use moonblokz_radio_lib::{MessageType, RadioMessage, RadioPacket, ScoringMatrix}
 use std::collections::{HashMap, VecDeque};
 use std::fs;
 
+use crate::common::connection_matrix::ConnectionMatrixParser;
 use crate::{
     UICommandQueueReceiver, UIRefreshQueueSender, time_driver,
     ui::{NodeInfo, NodeUIState, UICommand, UIRefreshState},
@@ -25,10 +26,14 @@ use crate::{
 use super::geometry::{distance_from_d2, distance2, is_intersect};
 use super::log_capture::drain_captured_logs;
 use super::node_task::node_task;
-use super::signal_calculations::{calculate_air_time, calculate_effective_distance, calculate_rssi, calculate_snr_limit, dbm_to_mw, get_cad_time, mw_to_dbm};
+use super::signal_calculations::{
+    calculate_air_time, calculate_effective_distance, calculate_rssi, calculate_snr_limit,
+    dbm_to_mw, get_cad_time, mw_to_dbm,
+};
 use super::types::{
-    AirtimeWaitingPacket, CAPTURE_THRESHOLD, CadItem, FullMessage, LogLine, NODE_FULL_MESSAGES_CAPACITY, NODE_MESSAGES_CAPACITY, Node, NodeInputMessage,
-    NodeInputQueue, NodeMessage, NodeOutputMessage, NodeOutputPayload, NodesOutputQueue, Point, Scene,
+    AirtimeWaitingPacket, CAPTURE_THRESHOLD, CadItem, FullMessage, LogLine,
+    NODE_FULL_MESSAGES_CAPACITY, NODE_MESSAGES_CAPACITY, Node, NodeInputMessage, NodeInputQueue,
+    NodeMessage, NodeOutputMessage, NodeOutputPayload, NodesOutputQueue, Point, Scene,
 };
 
 /// Wait for a configuration file path from UI commands.
@@ -98,7 +103,11 @@ fn validate_scene(scene: &Scene) -> Result<(), String> {
         return Err("Scene must contain at least one node".to_string());
     }
     if scene.nodes.len() > MAX_NODES {
-        return Err(format!("Node count {} exceeds maximum of {}", scene.nodes.len(), MAX_NODES));
+        return Err(format!(
+            "Node count {} exceeds maximum of {}",
+            scene.nodes.len(),
+            MAX_NODES
+        ));
     }
 
     // Check for duplicate node IDs
@@ -130,7 +139,10 @@ fn validate_scene(scene: &Scene) -> Result<(), String> {
 
     // Validate LoRa parameters
     if scene.lora_parameters.spreading_factor < 5 || scene.lora_parameters.spreading_factor > 12 {
-        return Err(format!("Invalid spreading_factor {}, must be 5-12", scene.lora_parameters.spreading_factor));
+        return Err(format!(
+            "Invalid spreading_factor {}, must be 5-12",
+            scene.lora_parameters.spreading_factor
+        ));
     }
     if scene.lora_parameters.bandwidth == 0 {
         return Err("Invalid bandwidth, must be positive".to_string());
@@ -169,10 +181,16 @@ fn validate_scene(scene: &Scene) -> Result<(), String> {
                     ));
                 }
                 // Check that top-left is actually top-left and bottom-right is bottom-right
-                if position.top_left.x >= position.bottom_right.x || position.top_left.y >= position.bottom_right.y {
+                if position.top_left.x >= position.bottom_right.x
+                    || position.top_left.y >= position.bottom_right.y
+                {
                     return Err(format!(
                         "Obstacle {} (rectangle) has invalid geometry: top-left ({}, {}) must be strictly less than bottom-right ({}, {})",
-                        idx, position.top_left.x, position.top_left.y, position.bottom_right.x, position.bottom_right.y
+                        idx,
+                        position.top_left.x,
+                        position.top_left.y,
+                        position.bottom_right.x,
+                        position.bottom_right.y
                     ));
                 }
             }
@@ -192,7 +210,10 @@ fn validate_scene(scene: &Scene) -> Result<(), String> {
                 let max_extent_x = position.center.x + position.radius;
                 let max_extent_y = position.center.y + position.radius;
                 if max_extent_x > MAX_WORLD_COORD || max_extent_y > MAX_WORLD_COORD {
-                    return Err(format!("Obstacle {} (circle) extends beyond world bounds (0-{})", idx, MAX_WORLD_COORD));
+                    return Err(format!(
+                        "Obstacle {} (circle) extends beyond world bounds (0-{})",
+                        idx, MAX_WORLD_COORD
+                    ));
                 }
             }
         }
@@ -202,12 +223,18 @@ fn validate_scene(scene: &Scene) -> Result<(), String> {
 }
 
 async fn load_scene(config_file_path: &str, ui_refresh_tx: &UIRefreshQueueSender) -> Option<Scene> {
-    let file_result = fs::read_to_string(config_file_path).with_context(|| format!("Failed to read file: {config_file_path}"));
+    let file_result = fs::read_to_string(config_file_path)
+        .with_context(|| format!("Failed to read file: {config_file_path}"));
 
     let data = match file_result {
         Ok(data) => data,
         Err(err) => {
-            ui_refresh_tx.send(UIRefreshState::Alert(format!("Error reading config file: {}", err))).await;
+            ui_refresh_tx
+                .send(UIRefreshState::Alert(format!(
+                    "Error reading config file: {}",
+                    err
+                )))
+                .await;
             return None;
         }
     };
@@ -217,7 +244,12 @@ async fn load_scene(config_file_path: &str, ui_refresh_tx: &UIRefreshQueueSender
     let mut scene = match result {
         Ok(scene) => scene,
         Err(err) => {
-            ui_refresh_tx.send(UIRefreshState::Alert(format!("Error parsing config file: {}", err))).await;
+            ui_refresh_tx
+                .send(UIRefreshState::Alert(format!(
+                    "Error parsing config file: {}",
+                    err
+                )))
+                .await;
             return None;
         }
     };
@@ -240,7 +272,10 @@ async fn load_scene(config_file_path: &str, ui_refresh_tx: &UIRefreshQueueSender
     // Validate the parsed scene before returning
     if let Err(validation_error) = validate_scene(&scene) {
         ui_refresh_tx
-            .send(UIRefreshState::Alert(format!("Invalid scene configuration: {}", validation_error)))
+            .send(UIRefreshState::Alert(format!(
+                "Invalid scene configuration: {}",
+                validation_error
+            )))
             .await;
         return None;
     }
@@ -264,7 +299,12 @@ async fn initialize_scene_ui(scene: &Scene, ui_refresh_tx: &UIRefreshQueueSender
     let poor_limit = scoring_matrix.poor_limit;
     let excellent_limit = scoring_matrix.excellent_limit;
 
-    _ = ui_refresh_tx.send(UIRefreshState::PoorAndExcellentLimits(poor_limit, excellent_limit)).await;
+    _ = ui_refresh_tx
+        .send(UIRefreshState::PoorAndExcellentLimits(
+            poor_limit,
+            excellent_limit,
+        ))
+        .await;
 
     // Publish initial nodes to the UI (radio_strength rendered as effective distance in world units).
     ui_refresh_tx
@@ -278,14 +318,20 @@ async fn initialize_scene_ui(scene: &Scene, ui_refresh_tx: &UIRefreshQueueSender
                         x: n.position.x,
                         y: n.position.y,
                     },
-                    radio_strength: calculate_effective_distance(n.radio_strength as f32, &scene.lora_parameters, &scene.path_loss_parameters) as u32,
+                    radio_strength: calculate_effective_distance(
+                        n.radio_strength as f32,
+                        &scene.lora_parameters,
+                        &scene.path_loss_parameters,
+                    ) as u32,
                 })
                 .collect(),
         ))
         .await;
 
     // Publish obstacles to the UI
-    ui_refresh_tx.send(UIRefreshState::ObstaclesUpdated(scene.obstacles.clone())).await;
+    ui_refresh_tx
+        .send(UIRefreshState::ObstaclesUpdated(scene.obstacles.clone()))
+        .await;
 
     // Publish scene dimensions to the UI
     {
@@ -301,7 +347,11 @@ async fn initialize_scene_ui(scene: &Scene, ui_refresh_tx: &UIRefreshQueueSender
 
     if let Some(ref bg_image) = scene.background_image {
         log::info!("Background image specified: {:?}", bg_image);
-        ui_refresh_tx.send(UIRefreshState::BackgroundImageUpdated(Some(bg_image.clone()))).await;
+        ui_refresh_tx
+            .send(UIRefreshState::BackgroundImageUpdated(Some(
+                bg_image.clone(),
+            )))
+            .await;
     }
 }
 
@@ -322,7 +372,11 @@ async fn initialize_scene_ui(scene: &Scene, ui_refresh_tx: &UIRefreshQueueSender
 /// # Returns
 ///
 /// HashMap mapping node IDs to their initialized Node structs.
-fn initialize_nodes(spawner: &Spawner, scene: &Scene, nodes_output_channel: &'static NodesOutputQueue) -> HashMap<u32, Node> {
+fn initialize_nodes(
+    spawner: &Spawner,
+    scene: &Scene,
+    nodes_output_channel: &'static NodesOutputQueue,
+) -> HashMap<u32, Node> {
     let mut nodes_map: HashMap<u32, Node> = HashMap::new();
 
     for node in &scene.nodes {
@@ -339,7 +393,11 @@ fn initialize_nodes(spawner: &Spawner, scene: &Scene, nodes_output_channel: &'st
 
         let mut new_node = node.clone();
         new_node.node_input_queue_sender = Some(node_input_channel.sender());
-        new_node.cached_effective_distance = calculate_effective_distance(new_node.radio_strength as f32, &scene.lora_parameters, &scene.path_loss_parameters);
+        new_node.cached_effective_distance = calculate_effective_distance(
+            new_node.radio_strength as f32,
+            &scene.lora_parameters,
+            &scene.path_loss_parameters,
+        );
 
         // Ensure runtime-only fields are initialized
         if new_node.node_radio_packets.is_empty() {
@@ -425,12 +483,24 @@ async fn handle_radio_transfer(
 ) {
     // Handle special message types for UI
     let sequence: Option<u32> = if packet.message_type() == MessageType::AddBlock as u8 {
-        let seq = u32::from_le_bytes([packet.data[5], packet.data[6], packet.data[7], packet.data[8]]);
-        _ = ui_refresh_tx.try_send(UIRefreshState::SendMessageInMeasurement(seq)).ok();
+        let seq = u32::from_le_bytes([
+            packet.data[5],
+            packet.data[6],
+            packet.data[7],
+            packet.data[8],
+        ]);
+        _ = ui_refresh_tx
+            .try_send(UIRefreshState::SendMessageInMeasurement(seq))
+            .ok();
         Some(seq)
     } else if packet.message_type() == MessageType::RequestBlockPart as u8 {
         // For RequestBlockPart, sequence is at the same offset as AddBlock
-        Some(u32::from_le_bytes([packet.data[5], packet.data[6], packet.data[7], packet.data[8]]))
+        Some(u32::from_le_bytes([
+            packet.data[5],
+            packet.data[6],
+            packet.data[7],
+            packet.data[8],
+        ]))
     } else {
         None
     };
@@ -454,7 +524,8 @@ async fn handle_radio_transfer(
         });
 
         // Enqueue the transmitter's own airtime window for collision modeling.
-        let airtime_ms = (calculate_air_time(&scene.lora_parameters, packet.length) * 1000.0) as u64;
+        let airtime_ms =
+            (calculate_air_time(&scene.lora_parameters, packet.length) * 1000.0) as u64;
         node.push_airtime_packet(AirtimeWaitingPacket {
             packet: packet.clone(),
             sender_node_id: node_id,
@@ -474,7 +545,11 @@ async fn handle_radio_transfer(
             ))
             .ok();
 
-        (node.position.clone(), node.radio_strength, node.cached_effective_distance)
+        (
+            node.position.clone(),
+            node.radio_strength,
+            node.cached_effective_distance,
+        )
     };
 
     // Notify UI of transmission
@@ -485,10 +560,24 @@ async fn handle_radio_transfer(
     ));
 
     // Find target receivers within range and not occluded
-    let target_node_ids = find_target_nodes(node_id, &node_position, node_effective_distance, nodes_map, scene);
+    let target_node_ids = find_target_nodes(
+        node_id,
+        &node_position,
+        node_effective_distance,
+        nodes_map,
+        scene,
+    );
 
     // Queue packet reception for each target
-    distribute_packet_to_targets(&packet, node_id, &node_position, node_radio_strength, &target_node_ids, nodes_map, scene);
+    distribute_packet_to_targets(
+        &packet,
+        node_id,
+        &node_position,
+        node_radio_strength,
+        &target_node_ids,
+        nodes_map,
+        scene,
+    );
 }
 
 /// Find all target nodes within radio range and not blocked by obstacles.
@@ -508,7 +597,13 @@ async fn handle_radio_transfer(
 /// # Returns
 ///
 /// Vector of node IDs that can receive the transmission.
-fn find_target_nodes(sender_id: u32, sender_position: &Point, sender_effective_distance: f32, nodes_map: &HashMap<u32, Node>, scene: &Scene) -> Vec<u32> {
+fn find_target_nodes(
+    sender_id: u32,
+    sender_position: &Point,
+    sender_effective_distance: f32,
+    nodes_map: &HashMap<u32, Node>,
+    scene: &Scene,
+) -> Vec<u32> {
     let eff2 = (sender_effective_distance as f64).powi(2);
     let mut target_ids = Vec::new();
 
@@ -571,7 +666,11 @@ fn distribute_packet_to_targets(
             sender_node_id: sender_id,
             start_time: Instant::now(),
             airtime: Duration::from_millis(airtime_ms),
-            rssi: calculate_rssi(distance as f32, sender_radio_strength, &scene.path_loss_parameters),
+            rssi: calculate_rssi(
+                distance as f32,
+                sender_radio_strength,
+                &scene.path_loss_parameters,
+            ),
             processed: false,
         });
     }
@@ -596,12 +695,16 @@ fn process_cad_requests(nodes_map: &mut HashMap<u32, Node>) {
     for node in nodes_map.values_mut() {
         for cad_item in node.cad_waiting_list.iter() {
             if cad_item.end_time < now {
-                let activity = node
-                    .airtime_waiting_packets
-                    .iter()
-                    .any(|packet| packet.start_time < cad_item.end_time && packet.start_time + packet.airtime > cad_item.start_time);
+                let activity = node.airtime_waiting_packets.iter().any(|packet| {
+                    packet.start_time < cad_item.end_time
+                        && packet.start_time + packet.airtime > cad_item.start_time
+                });
 
-                let _ = node.node_input_queue_sender.as_ref().unwrap().try_send(NodeInputMessage::CADResponse(activity));
+                let _ = node
+                    .node_input_queue_sender
+                    .as_ref()
+                    .unwrap()
+                    .try_send(NodeInputMessage::CADResponse(activity));
             }
         }
 
@@ -622,8 +725,9 @@ fn find_next_packet_to_process(node: &mut Node) -> Option<(usize, Instant, Insta
         .unwrap_or_else(Instant::now);
 
     // Clean up processed packets that are no longer relevant
-    node.airtime_waiting_packets
-        .retain(|packet| !packet.processed || packet.start_time + packet.airtime >= earliest_start_time);
+    node.airtime_waiting_packets.retain(|packet| {
+        !packet.processed || packet.start_time + packet.airtime >= earliest_start_time
+    });
 
     // Find the first unprocessed packet
     node.airtime_waiting_packets
@@ -737,10 +841,12 @@ async fn process_packet_reception(
     if sinr >= snr_limit && !destructive_collision {
         if let Some(sender) = &node.node_input_queue_sender {
             let _ = sender
-                .send(NodeInputMessage::RadioTransfer(moonblokz_radio_lib::ReceivedPacket {
-                    packet: packet.packet.clone(),
-                    link_quality,
-                }))
+                .send(NodeInputMessage::RadioTransfer(
+                    moonblokz_radio_lib::ReceivedPacket {
+                        packet: packet.packet.clone(),
+                        link_quality,
+                    },
+                ))
                 .await;
         }
 
@@ -801,7 +907,9 @@ async fn process_all_packet_receptions(
     total_sent_packets: u64,
 ) {
     for node in nodes_map.values_mut() {
-        if let Some((packet_index, packet_start, packet_end, packet_rssi)) = find_next_packet_to_process(node) {
+        if let Some((packet_index, packet_start, packet_end, packet_rssi)) =
+            find_next_packet_to_process(node)
+        {
             process_packet_reception(
                 node,
                 packet_index,
@@ -856,8 +964,18 @@ fn adjust_auto_speed(
 
 /// Distribute captured logs from moonblokz_radio_lib to corresponding nodes.
 /// Logs are parsed for node_id prefix ([N]) and routed to the appropriate node's log buffer.
-fn distribute_captured_logs(nodes_map: &mut std::collections::HashMap<u32, Node>) {
+fn distribute_captured_logs(
+    nodes_map: &mut std::collections::HashMap<u32, Node>,
+    connection_matrix_parser: &mut ConnectionMatrixParser,
+    ui_refresh_tx: &UIRefreshQueueSender,
+) {
     for entry in drain_captured_logs() {
+        if let Some(matrix) = connection_matrix_parser.handle_line(entry.node_id, &entry.content) {
+            ui_refresh_tx
+                .try_send(UIRefreshState::ConnectionMatrixUpdated(matrix))
+                .ok();
+        }
+
         if let Some(node) = nodes_map.get_mut(&entry.node_id) {
             node.push_log_line(LogLine {
                 timestamp: entry.timestamp,
@@ -878,11 +996,17 @@ fn distribute_captured_logs(nodes_map: &mut std::collections::HashMap<u32, Node>
 ///    per node (to preserve order), compute SINR and collisions, and deliver RX.
 /// 4) Adjust simulation speed if auto-speed is enabled based on observed delay.
 #[embassy_executor::task]
-pub async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshQueueSender, ui_command_rx: UICommandQueueReceiver, scene_path: Option<String>) {
+pub async fn network_task(
+    spawner: Spawner,
+    ui_refresh_tx: UIRefreshQueueSender,
+    ui_command_rx: UICommandQueueReceiver,
+    scene_path: Option<String>,
+) {
     // Global counters for the UI
     let mut total_collision = 0;
     let mut total_received_packets = 0;
     let mut total_sent_packets = 0;
+    let mut connection_matrix_parser = ConnectionMatrixParser::new();
 
     // Get configuration file path (either from parameter or wait for UI command)
     let config_file_path = match scene_path {
@@ -930,7 +1054,13 @@ pub async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshQueueSender,
         };
 
         // Await forwarded messages from any node or UI commands
-        match select3(nodes_output_channel.receiver().receive(), ui_command_rx.receive(), Timer::at(wait_deadline)).await {
+        match select3(
+            nodes_output_channel.receiver().receive(),
+            ui_command_rx.receive(),
+            Timer::at(wait_deadline),
+        )
+        .await
+        {
             Either3::First(NodeOutputMessage { node_id, payload }) => match payload {
                 NodeOutputPayload::RadioTransfer(packet) => {
                     handle_radio_transfer(
@@ -991,12 +1121,20 @@ pub async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshQueueSender,
                     }
                 }
                 NodeOutputPayload::NodeReachedInMeasurement(measurement_id) => {
-                    ui_refresh_tx.try_send(UIRefreshState::NodeReachedInMeasurement(node_id, measurement_id)).ok();
+                    ui_refresh_tx
+                        .try_send(UIRefreshState::NodeReachedInMeasurement(
+                            node_id,
+                            measurement_id,
+                        ))
+                        .ok();
                 }
             },
             Either3::Second(cmd) => match cmd {
                 UICommand::LoadFile(path) => {
-                    log::warn!("LoadFile command received after initialization: {} (ignored)", path);
+                    log::warn!(
+                        "LoadFile command received after initialization: {} (ignored)",
+                        path
+                    );
                 }
                 UICommand::RequestNodeInfo(node_id) => {
                     if let Some(node) = nodes_map.get(&node_id) {
@@ -1014,7 +1152,11 @@ pub async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshQueueSender,
                     if let Some(node) = nodes_map.get(&node_id) {
                         if let Some(sender) = &node.node_input_queue_sender {
                             let message_body: [u8; 2000] = [22; 2000];
-                            let message = RadioMessage::add_block_with(node_id, measurement_identifier, &message_body);
+                            let message = RadioMessage::add_block_with(
+                                node_id,
+                                measurement_identifier,
+                                &message_body,
+                            );
                             let _ = sender.send(NodeInputMessage::SendMessage(message)).await;
                         }
                     }
@@ -1030,6 +1172,13 @@ pub async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshQueueSender,
                     // Control commands only apply to analyzer mode (real-time tracking)
                     log::debug!("SendControlCommand ignored in simulation mode");
                 }
+                UICommand::RequestConnectionMatrix(node_id) => {
+                    if let Some(node) = nodes_map.get(&node_id) {
+                        if let Some(sender) = &node.node_input_queue_sender {
+                            let _ = sender.send(NodeInputMessage::RequestConnectionMatrix).await;
+                        }
+                    }
+                }
             },
             Either3::Third(_) => {
                 // Determine whether the real event was reached or this was just the periodic tick
@@ -1044,22 +1193,36 @@ pub async fn network_task(spawner: Spawner, ui_refresh_tx: UIRefreshQueueSender,
                     if time_delay > Duration::from_millis(10) {
                         if !delay_warning_issued {
                             delay_warning_issued = true;
-                            let _ = ui_refresh_tx.try_send(UIRefreshState::SimulationDelayWarningChanged(time_delay));
+                            let _ = ui_refresh_tx.try_send(
+                                UIRefreshState::SimulationDelayWarningChanged(time_delay),
+                            );
                         }
                     } else if delay_warning_issued {
                         delay_warning_issued = false;
-                        let _ = ui_refresh_tx.try_send(UIRefreshState::SimulationDelayWarningChanged(Duration::from_millis(0)));
+                        let _ = ui_refresh_tx.try_send(
+                            UIRefreshState::SimulationDelayWarningChanged(Duration::from_millis(0)),
+                        );
                     }
                 }
 
                 if auto_speed_enabled {
                     if let Some(time_delay) = delay_for_autospeed {
-                        adjust_auto_speed(time_delay, &mut upcounter, auto_speed_min_percent, auto_speed_max_percent, &ui_refresh_tx);
+                        adjust_auto_speed(
+                            time_delay,
+                            &mut upcounter,
+                            auto_speed_min_percent,
+                            auto_speed_max_percent,
+                            &ui_refresh_tx,
+                        );
                     }
                 }
 
                 // Distribute captured logs from moonblokz_radio_lib to nodes
-                distribute_captured_logs(&mut nodes_map);
+                distribute_captured_logs(
+                    &mut nodes_map,
+                    &mut connection_matrix_parser,
+                    &ui_refresh_tx,
+                );
 
                 // Only run event processing when the actual event deadline was reached
                 if event_reached {

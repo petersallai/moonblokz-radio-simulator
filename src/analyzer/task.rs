@@ -21,6 +21,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::Instant;
 
+use crate::common::connection_matrix::ConnectionMatrixParser;
 use crate::common::scene::{Scene, SceneMode, load_scene};
 use crate::control::{ControlCommand, ControlConfig, TelemetryClient};
 use crate::simulation::types::{FullMessage, LogLine, NodeMessage};
@@ -97,13 +98,22 @@ pub async fn analyzer_task(
     let scene = match load_scene(&scene_path, SceneMode::Analyzer) {
         Ok(s) => s,
         Err(e) => {
-            let _ = ui_refresh_tx.send(UIRefreshState::Alert(format!("Failed to load scene: {}", e))).await;
+            let _ = ui_refresh_tx
+                .send(UIRefreshState::Alert(format!(
+                    "Failed to load scene: {}",
+                    e
+                )))
+                .await;
             return;
         }
     };
 
     // Build node effective distances map for radio message visualization
-    let node_effective_distances: HashMap<u32, u32> = scene.nodes.iter().map(|n| (n.node_id, n.effective_distance.unwrap_or(100))).collect();
+    let node_effective_distances: HashMap<u32, u32> = scene
+        .nodes
+        .iter()
+        .map(|n| (n.node_id, n.effective_distance.unwrap_or(100)))
+        .collect();
 
     // Initialize control client for real-time mode
     let telemetry_client: Option<Arc<TelemetryClient>> = if mode == AnalyzerMode::RealtimeTracking {
@@ -135,7 +145,9 @@ pub async fn analyzer_task(
 
     // Notify UI of control availability
     let control_available = telemetry_client.is_some();
-    let _ = ui_refresh_tx.send(UIRefreshState::ControlAvailable(control_available)).await;
+    let _ = ui_refresh_tx
+        .send(UIRefreshState::ControlAvailable(control_available))
+        .await;
 
     // Initialize UI with scene data
     initialize_scene_ui(&scene, &ui_refresh_tx).await;
@@ -145,13 +157,20 @@ pub async fn analyzer_task(
         AnalyzerMode::RealtimeTracking => crate::ui::OperatingMode::RealtimeTracking,
         AnalyzerMode::LogVisualization => crate::ui::OperatingMode::LogVisualization,
     };
-    let _ = ui_refresh_tx.send(UIRefreshState::ModeChanged(operating_mode)).await;
+    let _ = ui_refresh_tx
+        .send(UIRefreshState::ModeChanged(operating_mode))
+        .await;
 
     // Open log file
     let mut log_loader = match LogLoader::new(&log_path, mode) {
         Ok(l) => l,
         Err(e) => {
-            let _ = ui_refresh_tx.send(UIRefreshState::Alert(format!("Failed to open log file: {}", e))).await;
+            let _ = ui_refresh_tx
+                .send(UIRefreshState::Alert(format!(
+                    "Failed to open log file: {}",
+                    e
+                )))
+                .await;
             return;
         }
     };
@@ -161,6 +180,7 @@ pub async fn analyzer_task(
     let mut total_sent = 0u64;
     let mut total_received = 0u64;
     let mut delay_tracker = DelayTracker::new();
+    let mut connection_matrix_parser = ConnectionMatrixParser::new();
 
     // Timing state
     let mut last_log_timestamp: Option<DateTime<Utc>> = None;
@@ -176,6 +196,13 @@ pub async fn analyzer_task(
                         // First, try to capture the raw log line for Log Stream tab
                         // This captures ALL log lines with a [node_id] pattern
                         if let Some((node_id, raw_log)) = parse_raw_log_line(&line) {
+                            if let Some(matrix) =
+                                connection_matrix_parser.handle_line(node_id, &raw_log.content)
+                            {
+                                let _ = ui_refresh_tx
+                                    .send(UIRefreshState::ConnectionMatrixUpdated(matrix))
+                                    .await;
+                            }
                             state.add_log_line(node_id, raw_log);
                         }
 
@@ -227,8 +254,14 @@ pub async fn analyzer_task(
 
                                 if remaining_wait_ms > 0 && mode == AnalyzerMode::LogVisualization {
                                     // Phase 2: Wait for remaining time OR UI command
-                                    let wait_duration = Duration::from_millis(remaining_wait_ms as u64);
-                                    match select(Timer::after(wait_duration), ui_command_rx.receive()).await {
+                                    let wait_duration =
+                                        Duration::from_millis(remaining_wait_ms as u64);
+                                    match select(
+                                        Timer::after(wait_duration),
+                                        ui_command_rx.receive(),
+                                    )
+                                    .await
+                                    {
                                         Either::First(_) => {
                                             // Timer expired - process the event
                                             last_log_timestamp = Some(timestamp);
@@ -250,7 +283,12 @@ pub async fn analyzer_task(
                                         Either::Second(cmd) => {
                                             // UI command arrived during wait - handle it
                                             // The event is lost in this case (spec says start next iteration)
-                                            handle_ui_command(cmd, &state, &ui_refresh_tx, &telemetry_client);
+                                            handle_ui_command(
+                                                cmd,
+                                                &state,
+                                                &ui_refresh_tx,
+                                                &telemetry_client,
+                                            );
                                             continue;
                                         }
                                     }
@@ -298,12 +336,19 @@ pub async fn analyzer_task(
 }
 
 /// Handle a UI command.
-fn handle_ui_command(cmd: UICommand, state: &AnalyzerState, ui_refresh_tx: &UIRefreshQueueSender, telemetry_client: &Option<Arc<TelemetryClient>>) {
+fn handle_ui_command(
+    cmd: UICommand,
+    state: &AnalyzerState,
+    ui_refresh_tx: &UIRefreshQueueSender,
+    telemetry_client: &Option<Arc<TelemetryClient>>,
+) {
     match cmd {
         UICommand::RequestNodeInfo(node_id) => {
             // Build NodeInfo from packet history
             let node_info = build_node_info(node_id, state);
-            let _ = ui_refresh_tx.try_send(UIRefreshState::NodeInfo(node_info)).ok();
+            let _ = ui_refresh_tx
+                .try_send(UIRefreshState::NodeInfo(node_info))
+                .ok();
         }
         UICommand::SendControlCommand(control_cmd) => {
             if let Some(client) = telemetry_client {
@@ -320,11 +365,29 @@ fn handle_ui_command(cmd: UICommand, state: &AnalyzerState, ui_refresh_tx: &UIRe
             if let Some(client) = telemetry_client {
                 let control_cmd = ControlCommand::StartMeasurement { node_id, sequence };
                 match client.send_command(&control_cmd) {
-                    Ok(_) => log::info!("Start measurement command sent successfully for node {} with sequence {}", node_id, sequence),
+                    Ok(_) => log::info!(
+                        "Start measurement command sent successfully for node {} with sequence {}",
+                        node_id,
+                        sequence
+                    ),
                     Err(e) => log::error!("Failed to send start measurement command: {}", e),
                 }
             } else {
                 log::warn!("Start measurement command received but no telemetry client available");
+            }
+        }
+        UICommand::RequestConnectionMatrix(node_id) => {
+            if let Some(client) = telemetry_client {
+                let control_cmd = ControlCommand::RunCommand {
+                    node_id: Some(node_id),
+                    command: "/CM".to_string(),
+                };
+                match client.send_command(&control_cmd) {
+                    Ok(_) => log::info!("Connection matrix request sent for node {}", node_id),
+                    Err(e) => log::error!("Failed to send connection matrix request: {}", e),
+                }
+            } else {
+                log::warn!("Connection matrix request received but no telemetry client available");
             }
         }
         _ => {
@@ -335,6 +398,15 @@ fn handle_ui_command(cmd: UICommand, state: &AnalyzerState, ui_refresh_tx: &UIRe
 
 /// Initialize UI with scene data (nodes, obstacles, dimensions).
 async fn initialize_scene_ui(scene: &Scene, ui_refresh_tx: &UIRefreshQueueSender) {
+    if let (Some(weak), Some(excellent)) = (
+        scene.link_quality_weak_threshold,
+        scene.link_quality_excellent_threshold,
+    ) {
+        let _ = ui_refresh_tx
+            .send(UIRefreshState::PoorAndExcellentLimits(weak, excellent))
+            .await;
+    }
+
     // Publish nodes with effective distances
     let node_states: Vec<NodeUIState> = scene
         .nodes
@@ -346,12 +418,17 @@ async fn initialize_scene_ui(scene: &Scene, ui_refresh_tx: &UIRefreshQueueSender
         })
         .collect();
 
-    let _ = ui_refresh_tx.send(UIRefreshState::NodesUpdated(node_states)).await;
+    let _ = ui_refresh_tx
+        .send(UIRefreshState::NodesUpdated(node_states))
+        .await;
 
     // Publish obstacles (using From trait for conversion)
-    let obstacles: Vec<crate::simulation::Obstacle> = scene.obstacles.iter().map(|o| o.into()).collect();
+    let obstacles: Vec<crate::simulation::Obstacle> =
+        scene.obstacles.iter().map(|o| o.into()).collect();
 
-    let _ = ui_refresh_tx.send(UIRefreshState::ObstaclesUpdated(obstacles)).await;
+    let _ = ui_refresh_tx
+        .send(UIRefreshState::ObstaclesUpdated(obstacles))
+        .await;
 
     // Publish scene dimensions
     let _ = ui_refresh_tx
@@ -366,7 +443,11 @@ async fn initialize_scene_ui(scene: &Scene, ui_refresh_tx: &UIRefreshQueueSender
     // Background image if present
     if let Some(ref bg_image) = scene.background_image {
         log::info!("Background image specified: {:?}", bg_image);
-        let _ = ui_refresh_tx.send(UIRefreshState::BackgroundImageUpdated(Some(bg_image.clone()))).await;
+        let _ = ui_refresh_tx
+            .send(UIRefreshState::BackgroundImageUpdated(Some(
+                bg_image.clone(),
+            )))
+            .await;
     }
 }
 
@@ -401,20 +482,33 @@ async fn process_event(
             if let Some(active_id) = state.active_measurement_id {
                 if let Some(seq) = sequence {
                     if active_id == *seq {
-                        let _ = ui_refresh_tx.try_send(UIRefreshState::SendMessageInMeasurement(*seq)).ok();
+                        let _ = ui_refresh_tx
+                            .try_send(UIRefreshState::SendMessageInMeasurement(*seq))
+                            .ok();
                     }
                 }
             }
 
             // Notify UI of transmission using the node's effective distance
-            let effective_distance = node_effective_distances.get(node_id).copied().unwrap_or(100);
+            let effective_distance = node_effective_distances
+                .get(node_id)
+                .copied()
+                .unwrap_or(100);
             let _ = ui_refresh_tx
-                .try_send(UIRefreshState::NodeSentRadioMessage(*node_id, *message_type, effective_distance))
+                .try_send(UIRefreshState::NodeSentRadioMessage(
+                    *node_id,
+                    *message_type,
+                    effective_distance,
+                ))
                 .ok();
 
             // Update counters
             let _ = ui_refresh_tx
-                .try_send(UIRefreshState::RadioMessagesCountUpdated(*total_sent, *total_received, 0))
+                .try_send(UIRefreshState::RadioMessagesCountUpdated(
+                    *total_sent,
+                    *total_received,
+                    0,
+                ))
                 .ok();
         }
         LogEvent::ReceivePacket { node_id, .. } => {
@@ -431,12 +525,20 @@ async fn process_event(
 
             // Update counters
             let _ = ui_refresh_tx
-                .try_send(UIRefreshState::RadioMessagesCountUpdated(*total_sent, *total_received, 0))
+                .try_send(UIRefreshState::RadioMessagesCountUpdated(
+                    *total_sent,
+                    *total_received,
+                    0,
+                ))
                 .ok();
         }
         LogEvent::StartMeasurement { node_id, sequence } => {
             state.active_measurement_id = Some(*sequence);
-            log::info!("Measurement started by node {} with sequence {}", node_id, sequence);
+            log::info!(
+                "Measurement started by node {} with sequence {}",
+                node_id,
+                sequence
+            );
         }
         LogEvent::ReceivedFullMessage {
             node_id,
@@ -453,7 +555,11 @@ async fn process_event(
             // If this is an AddBlock message (type 6), it might be part of a measurement
             if let Some(active_id) = state.active_measurement_id {
                 if active_id == *sequence {
-                    let _ = ui_refresh_tx.try_send(UIRefreshState::NodeReachedInMeasurement(*node_id, *sequence)).ok();
+                    let _ = ui_refresh_tx
+                        .try_send(UIRefreshState::NodeReachedInMeasurement(
+                            *node_id, *sequence,
+                        ))
+                        .ok();
                 }
             }
 
@@ -499,8 +605,15 @@ async fn process_event(
             node_version,
         } => {
             // Store version info for this node
-            state.node_versions.insert(*node_id, (*probe_version, *node_version));
-            log::trace!("Node {} version info: probe={}, node={}", node_id, probe_version, node_version);
+            state
+                .node_versions
+                .insert(*node_id, (*probe_version, *node_version));
+            log::trace!(
+                "Node {} version info: probe={}, node={}",
+                node_id,
+                probe_version,
+                node_version
+            );
         }
         LogEvent::PacketCrcError { node_id, .. } => {
             // CRC errors are treated like collisions - store in packet history
@@ -517,7 +630,11 @@ async fn process_event(
     }
 
     // Send timestamp update for UI display (as embassy_time::Instant from Unix epoch)
-    let _ = ui_refresh_tx.try_send(UIRefreshState::TimeUpdated(convert_to_embassy_instant(timestamp))).ok();
+    let _ = ui_refresh_tx
+        .try_send(UIRefreshState::TimeUpdated(convert_to_embassy_instant(
+            timestamp,
+        )))
+        .ok();
 }
 
 /// Build NodeInfo from the analyzer's packet history for a given node.
@@ -622,7 +739,11 @@ fn build_node_info(node_id: u32, state: &AnalyzerState) -> NodeInfo {
     };
 
     // Get version info from TM8 if available
-    let (probe_version, node_version) = state.node_versions.get(&node_id).map(|(p, n)| (Some(*p), Some(*n))).unwrap_or((None, None));
+    let (probe_version, node_version) = state
+        .node_versions
+        .get(&node_id)
+        .map(|(p, n)| (Some(*p), Some(*n)))
+        .unwrap_or((None, None));
 
     NodeInfo {
         node_id,

@@ -29,6 +29,7 @@ pub mod mode_selector;
 pub mod right_panel;
 pub mod top_panel;
 
+use crate::common::connection_matrix::ConnectionMatrix;
 use crate::simulation::types::{FullMessage, LogLine};
 use crate::simulation::{NodeMessage, Point};
 
@@ -109,6 +110,8 @@ pub enum UIRefreshState {
     TimeUpdated(Instant),
     /// Indicates whether control commands are available (config loaded successfully).
     ControlAvailable(bool),
+    /// Completed connection matrix for a requester node.
+    ConnectionMatrixUpdated(ConnectionMatrix),
 }
 
 /// UI-specific representation of a node's state.
@@ -148,4 +151,6 @@ pub enum UICommand {
     },
     /// Send a control command to the Telemetry Hub.
     SendControlCommand(crate::control::ControlCommand),
+    /// Request a connection matrix dump for the given node.
+    RequestConnectionMatrix(u32),
 }

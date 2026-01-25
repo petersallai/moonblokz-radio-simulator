@@ -13,7 +13,7 @@
 //! Only visible rows are rendered, allowing smooth scrolling through thousands of messages.
 //! Messages are displayed newest-first, with color coding:
 //! - Yellow rows: Messages sent by this node
-//! - Green rows: Messages received from other nodes  
+//! - Green rows: Messages received from other nodes
 //! - Red rows: Collision detected (packet lost)
 //!
 //! ## Link Quality Visualization
@@ -122,6 +122,9 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
                     ui.selectable_value(&mut state.inspector_tab, InspectorTab::RadioStream, "Radio Stream");
                     ui.selectable_value(&mut state.inspector_tab, InspectorTab::MessageStream, "Message Stream");
                     ui.selectable_value(&mut state.inspector_tab, InspectorTab::LogStream, "Log Stream");
+                    if state.operating_mode != OperatingMode::LogVisualization {
+                        ui.selectable_value(&mut state.inspector_tab, InspectorTab::ConnectionMatrix, "Connection Matrix");
+                    }
                 });
                 ui.add_space(4.0);
             }
@@ -134,16 +137,16 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
             let show_measurement_button = state.operating_mode != OperatingMode::LogVisualization;
             let show_control_buttons = state.operating_mode == OperatingMode::RealtimeTracking;
             let control_available = state.control_available;
-            
+
             ui.allocate_ui_with_layout(
                 egui::vec2(avail_w, avail_h),
                 egui::Layout::bottom_up(egui::Align::Center),
                 |ui| {
                     // In bottom_up layout, first items appear at the bottom
-                    
+
                     // Bottom padding
                     ui.add_space(8.0);
-                    
+
                     // Button area at bottom
                     if let Some(_i) = state.selected {
                         let button_w = (avail_w * 0.8).max(0.0);
@@ -161,7 +164,7 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
                             ui.horizontal(|ui| {
                                 let pad = (ui.available_width() - button_w).max(0.0) / 2.0;
                                 ui.add_space(pad);
-                                
+
                                 let measurement_button_title: String = if state.measurement_identifier > 0 {
                                     "Reset Measurement".into()
                                 } else {
@@ -188,9 +191,9 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
                                         state.measurement_100_message_count = 0;
                                     }
                                 }
-                                
+
                                 ui.add_space(6.0);
-                                
+
                                 ui.add_enabled_ui(control_available, |ui| {
                                     if ui
                                         .add_sized([half_button_w, button_h], egui::Button::new("Auto AddBlock"))
@@ -202,14 +205,14 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
                                     }
                                 });
                             });
-                            
+
                             ui.add_space(6.0);
-                            
+
                             // Row 1 (top row): Set Log Level, Node Command
                             ui.horizontal(|ui| {
                                 let pad = (ui.available_width() - button_w).max(0.0) / 2.0;
                                 ui.add_space(pad);
-                                
+
                                 ui.add_enabled_ui(control_available, |ui| {
                                     if ui
                                         .add_sized([half_button_w, button_h], egui::Button::new("Set Log Level"))
@@ -220,9 +223,9 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
                                         state.open_set_log_level_modal(Some(node_id));
                                     }
                                 });
-                                
+
                                 ui.add_space(6.0);
-                                
+
                                 ui.add_enabled_ui(control_available, |ui| {
                                     if ui
                                         .add_sized([half_button_w, button_h], egui::Button::new("Node Command"))
@@ -282,22 +285,30 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
                             egui::vec2(avail_w, table_h),
                             egui::Layout::top_down(egui::Align::LEFT),
                             |ui| {
-                                if has_matching_node_info {
-                                    match current_tab {
-                                        InspectorTab::RadioStream => {
-                                            if let Some(node_info) = &state.node_info {
-                                                render_radio_stream_table(ui, state, node_info);
-                                            }
-                                        }
-                                        InspectorTab::MessageStream => {
-                                            if let Some(node_info) = &state.node_info {
-                                                render_message_stream_table(ui, state, node_info);
-                                            }
-                                        }
-                                        InspectorTab::LogStream => {
-                                            let log_lines = state.node_info.as_ref().map(|ni| ni.log_lines.clone());
-                                            if let Some(log_lines) = log_lines {
-                                                render_log_stream(ui, state, &log_lines);
+                                match current_tab {
+                                    InspectorTab::ConnectionMatrix => {
+                                        render_connection_matrix(ui, state, node_id);
+                                    }
+                                    _ => {
+                                        if has_matching_node_info {
+                                            match current_tab {
+                                                InspectorTab::RadioStream => {
+                                                    if let Some(node_info) = &state.node_info {
+                                                        render_radio_stream_table(ui, state, node_info);
+                                                    }
+                                                }
+                                                InspectorTab::MessageStream => {
+                                                    if let Some(node_info) = &state.node_info {
+                                                        render_message_stream_table(ui, state, node_info);
+                                                    }
+                                                }
+                                                InspectorTab::LogStream => {
+                                                    let log_lines = state.node_info.as_ref().map(|ni| ni.log_lines.clone());
+                                                    if let Some(log_lines) = log_lines {
+                                                        render_log_stream(ui, state, &log_lines);
+                                                    }
+                                                }
+                                                InspectorTab::ConnectionMatrix => {}
                                             }
                                         }
                                     }
@@ -338,6 +349,9 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
 /// * `node_info` - The selected node's detailed information
 fn render_radio_stream_table(ui: &mut egui::Ui, state: &AppState, node_info: &crate::ui::NodeInfo) {
     use egui_extras::{Column, TableBuilder};
+
+    let avail_w = ui.available_width();
+    ui.set_min_width(avail_w);
 
     let row_height = ui.text_style_height(&egui::TextStyle::Body) * 1.3;
     TableBuilder::new(ui)
@@ -387,7 +401,11 @@ fn render_radio_stream_table(ui: &mut egui::Ui, state: &AppState, node_info: &cr
 
                 // Color rows red if from this node, else green
                 let is_self = node_info.node_id == msg.sender_node;
-                let mut row_color = if is_self { Color32::YELLOW } else { Color32::LIGHT_GREEN };
+                let mut row_color = if is_self {
+                    Color32::YELLOW
+                } else {
+                    Color32::LIGHT_GREEN
+                };
                 let mut collision_fill: Option<Color32> = None;
                 if msg.collision {
                     // Paint whole row red for collisions and use white text for contrast
@@ -436,7 +454,11 @@ fn render_radio_stream_table(ui: &mut egui::Ui, state: &AppState, node_info: &cr
                 };
 
                 let message_type_color = color_for_message_type(msg.message_type, 1.0);
-                let link_quality_string = if is_self { "-".to_string() } else { format!("{}", msg.link_quality) };
+                let link_quality_string = if is_self {
+                    "-".to_string()
+                } else {
+                    format!("{}", msg.link_quality)
+                };
 
                 row.col(|ui| {
                     if let Some(fill) = collision_fill {
@@ -475,7 +497,10 @@ fn render_radio_stream_table(ui: &mut egui::Ui, state: &AppState, node_info: &cr
                         let rect = ui.available_rect_before_wrap();
                         ui.painter().rect_filled(rect, 0.0, fill);
                     }
-                    ui.colored_label(row_color, format!("{}/{}", msg.packet_index, msg.packet_count));
+                    ui.colored_label(
+                        row_color,
+                        format!("{}/{}", msg.packet_index, msg.packet_count),
+                    );
                 });
                 row.col(|ui| {
                     if let Some(fill) = collision_fill {
@@ -523,8 +548,15 @@ fn render_radio_stream_table(ui: &mut egui::Ui, state: &AppState, node_info: &cr
 /// * `ui` - egui UI context
 /// * `state` - Application state
 /// * `node_info` - The selected node's detailed information
-fn render_message_stream_table(ui: &mut egui::Ui, state: &AppState, node_info: &crate::ui::NodeInfo) {
+fn render_message_stream_table(
+    ui: &mut egui::Ui,
+    state: &AppState,
+    node_info: &crate::ui::NodeInfo,
+) {
     use egui_extras::{Column, TableBuilder};
+
+    let avail_w = ui.available_width();
+    ui.set_min_width(avail_w);
 
     let row_height = ui.text_style_height(&egui::TextStyle::Body) * 1.3;
 
@@ -560,8 +592,16 @@ fn render_message_stream_table(ui: &mut egui::Ui, state: &AppState, node_info: &
                 let msg = &node_info.messages[msg_idx];
 
                 let is_outgoing = msg.is_outgoing;
-                let row_color = if is_outgoing { Color32::YELLOW } else { Color32::LIGHT_GREEN };
-                let from_string = if is_outgoing { "Sent".to_string() } else { format!("#{}", msg.sender_node) };
+                let row_color = if is_outgoing {
+                    Color32::YELLOW
+                } else {
+                    Color32::LIGHT_GREEN
+                };
+                let from_string = if is_outgoing {
+                    "Sent".to_string()
+                } else {
+                    format!("#{}", msg.sender_node)
+                };
                 let type_string = match msg.message_type {
                     6 => "AddBlock",
                     _ => "Unknown",
@@ -612,13 +652,22 @@ fn render_message_stream_table(ui: &mut egui::Ui, state: &AppState, node_info: &
 /// * `ui` - egui UI context
 /// * `state` - Application state (mutable for filter input)
 /// * `log_lines` - The log lines to display
-fn render_log_stream(ui: &mut egui::Ui, state: &mut AppState, log_lines: &[crate::simulation::types::LogLine]) {
+fn render_log_stream(
+    ui: &mut egui::Ui,
+    state: &mut AppState,
+    log_lines: &[crate::simulation::types::LogLine],
+) {
     use egui_extras::{Column, TableBuilder};
+
+    let avail_w = ui.available_width();
+    ui.set_min_width(avail_w);
 
     // Filter input field at the top
     ui.horizontal(|ui| {
         ui.label("Filter:");
-        ui.add(egui::TextEdit::singleline(&mut state.log_filter).hint_text("Type to filter logs..."));
+        ui.add(
+            egui::TextEdit::singleline(&mut state.log_filter).hint_text("Type to filter logs..."),
+        );
         if ui.button("x").clicked() {
             state.log_filter.clear();
         }
@@ -685,7 +734,10 @@ fn render_log_stream(ui: &mut egui::Ui, state: &mut AppState, log_lines: &[crate
                 // Format time based on operating mode
                 let time_string = match state.operating_mode {
                     OperatingMode::Simulation => {
-                        let secs = log_line.timestamp.duration_since(state.start_time).as_secs();
+                        let secs = log_line
+                            .timestamp
+                            .duration_since(state.start_time)
+                            .as_secs();
                         format!("{} s", secs)
                     }
                     OperatingMode::RealtimeTracking | OperatingMode::LogVisualization => {
@@ -709,4 +761,140 @@ fn render_log_stream(ui: &mut egui::Ui, state: &mut AppState, log_lines: &[crate
                 });
             });
         });
+}
+
+/// Render the connection matrix tab with a query button and table.
+fn render_connection_matrix(ui: &mut egui::Ui, state: &mut AppState, node_id: u32) {
+    let can_query = state.operating_mode == OperatingMode::Simulation
+        || (state.operating_mode == OperatingMode::RealtimeTracking && state.control_available);
+
+    let has_matrix = state.connection_matrices.contains_key(&node_id);
+    let is_pending = state.connection_matrix_pending.contains(&node_id);
+
+    if can_query && !has_matrix && !is_pending {
+        state.connection_matrix_pending.insert(node_id);
+        let _ = state
+            .ui_command_tx
+            .try_send(UICommand::RequestConnectionMatrix(node_id));
+    }
+
+    ui.horizontal(|ui| {
+        ui.add_enabled_ui(can_query, |ui| {
+            if ui.button("Query Connection Matrix").clicked() {
+                state.connection_matrices.remove(&node_id);
+                state.connection_matrix_pending.insert(node_id);
+                let _ = state
+                    .ui_command_tx
+                    .try_send(UICommand::RequestConnectionMatrix(node_id));
+            }
+        });
+
+        if state.connection_matrix_pending.contains(&node_id) {
+            ui.add(egui::Spinner::new());
+        }
+    });
+
+    ui.add_space(8.0);
+
+    let matrix = state.connection_matrices.get(&node_id);
+
+    if let Some(matrix) = matrix {
+        render_connection_matrix_table(ui, state, matrix);
+    } else {
+        ui.label("No connection matrix available.");
+    }
+}
+
+fn render_connection_matrix_table(
+    ui: &mut egui::Ui,
+    state: &AppState,
+    matrix: &crate::common::connection_matrix::ConnectionMatrix,
+) {
+    use egui_extras::{Column, TableBuilder};
+
+    let avail_w = ui.available_width();
+    ui.set_min_width(avail_w);
+
+    let node_count = matrix.node_ids.len();
+    if node_count == 0 {
+        ui.label("Empty connection matrix.");
+        return;
+    }
+
+    let mut entries: Vec<(usize, usize, u8)> =
+        Vec::with_capacity(node_count.saturating_sub(1) * node_count);
+    for r in 0..node_count {
+        for c in 0..node_count {
+            if r == c {
+                continue;
+            }
+            let lq = matrix
+                .values
+                .get(r)
+                .and_then(|row| row.get(c))
+                .copied()
+                .unwrap_or(0);
+            if lq == 0 {
+                continue;
+            }
+            entries.push((r, c, lq));
+        }
+    }
+    let total_rows = entries.len();
+    let row_height = 18.0;
+
+    TableBuilder::new(ui)
+        .striped(true)
+        .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+        .column(Column::auto().resizable(true))
+        .column(Column::auto().resizable(true))
+        .column(Column::auto().resizable(true))
+        .header(20.0, |mut header| {
+            header.col(|ui| {
+                ui.label(egui::RichText::new("Sender node").strong());
+            });
+            header.col(|ui| {
+                ui.label(egui::RichText::new("Target node").strong());
+            });
+            header.col(|ui| {
+                ui.label(egui::RichText::new("Link quality").strong());
+            });
+        })
+        .body(|body| {
+            body.rows(row_height, total_rows, |mut row| {
+                let row_index = row.index();
+                let (r, c, link_quality) = entries[row_index];
+                let sender_id = matrix.node_ids[r];
+                let target_id = matrix.node_ids[c];
+
+                row.col(|ui| {
+                    ui.label(format!("#{}", sender_id));
+                });
+                row.col(|ui| {
+                    ui.label(format!("#{}", target_id));
+                });
+                row.col(|ui| {
+                    let color =
+                        link_quality_color(link_quality, state.poor_limit, state.excellent_limit);
+                    let mut text = egui::RichText::new(format!("{}", link_quality));
+                    if let Some(color) = color {
+                        text = text.color(color);
+                    }
+                    ui.label(text);
+                });
+            });
+        });
+}
+
+fn link_quality_color(value: u8, poor: u8, excellent: u8) -> Option<Color32> {
+    if poor == 0 || excellent == 0 || poor >= excellent {
+        return None;
+    }
+    if value <= poor {
+        Some(Color32::RED)
+    } else if value >= excellent {
+        Some(Color32::GREEN)
+    } else {
+        Some(Color32::YELLOW)
+    }
 }

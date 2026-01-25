@@ -99,7 +99,8 @@ pub(crate) fn calculate_path_loss(distance: f32, params: &PathLossParameters) ->
     if distance < 1.0 {
         return params.path_loss_at_reference_distance;
     }
-    let path_loss = params.path_loss_at_reference_distance + 10.0 * params.path_loss_exponent * distance.log10();
+    let path_loss = params.path_loss_at_reference_distance
+        + 10.0 * params.path_loss_exponent * distance.log10();
     // Sample log-normal shadowing as a Normal(0, sigma) in dB
     let shadowing = if params.shadowing_sigma > 0.0 {
         let normal = Normal::new(0.0_f32, params.shadowing_sigma).expect("invalid normal sigma");
@@ -121,7 +122,11 @@ pub(crate) fn calculate_path_loss(distance: f32, params: &PathLossParameters) ->
 // - Shadowing is intentionally not sampled here to keep the estimate stable across calls. The result is a statistical average, not a specific link instance.
 /// Estimate a deterministic “effective distance” based on a basic link budget
 /// without sampling shadowing. Used for range checks and UI visualization.
-pub(crate) fn calculate_effective_distance(tx_power_dbm: f32, lora_parameters: &LoraParameters, path_loss_parameters: &PathLossParameters) -> f32 {
+pub(crate) fn calculate_effective_distance(
+    tx_power_dbm: f32,
+    lora_parameters: &LoraParameters,
+    path_loss_parameters: &PathLossParameters,
+) -> f32 {
     // Find distance d where received power equals the receiving limit (sensitivity threshold):
     //   P_rx(dBm) = P_tx(dBm) - PL(d) = receiving_limit
     // With PL(d) = PL(d0) + 10 * n * log10(d/d0) and d0 = 1 m, PL(d) = PL0 + 10n*log10(d)
@@ -138,7 +143,10 @@ pub(crate) fn calculate_effective_distance(tx_power_dbm: f32, lora_parameters: &
     10.0_f32.powf(numerator / denom)
 }
 
-pub(crate) fn calculate_receiving_limit_with_basic_noise(lora_parameters: &LoraParameters, path_loss_parameters: &PathLossParameters) -> f32 {
+pub(crate) fn calculate_receiving_limit_with_basic_noise(
+    lora_parameters: &LoraParameters,
+    path_loss_parameters: &PathLossParameters,
+) -> f32 {
     let snr_limit = calculate_snr_limit(lora_parameters);
 
     return path_loss_parameters.noise_floor + snr_limit;
@@ -164,13 +172,18 @@ pub(crate) fn calculate_air_time(lora_parameters: &LoraParameters, payload_size:
     // LoRa maximum payload is typically 255 bytes (SX126x/SX127x standard)
     const MAX_LORA_PAYLOAD: usize = 255;
     if payload_size > MAX_LORA_PAYLOAD {
-        log::warn!("Payload size {} exceeds LoRa MTU {}, clamping to maximum", payload_size, MAX_LORA_PAYLOAD);
+        log::warn!(
+            "Payload size {} exceeds LoRa MTU {}, clamping to maximum",
+            payload_size,
+            MAX_LORA_PAYLOAD
+        );
         return calculate_air_time(lora_parameters, MAX_LORA_PAYLOAD);
     }
 
     // LoRa symbol time in seconds: T_sym = 2^SF / BW
     // This determines how long each symbol takes to transmit
-    let symbol_time = 2.0_f32.powi(lora_parameters.spreading_factor as i32) / lora_parameters.bandwidth as f32;
+    let symbol_time =
+        2.0_f32.powi(lora_parameters.spreading_factor as i32) / lora_parameters.bandwidth as f32;
 
     // Include preamble time. Default LoRa preamble is typically 8 symbols.
     // Effective preamble duration: (N_preamble + 4.25) * T_sym
@@ -191,8 +204,16 @@ pub(crate) fn calculate_air_time(lora_parameters: &LoraParameters, payload_size:
     // - Explicit header mode (IH = 0). If you later support implicit header, add a flag and set IH=1.
     let sf = lora_parameters.spreading_factor as f32;
     let pl = payload_size as f32;
-    let crc = if lora_parameters.crc_enabled { 1.0 } else { 0.0 };
-    let de = if lora_parameters.low_data_rate_optimization { 1.0 } else { 0.0 };
+    let crc = if lora_parameters.crc_enabled {
+        1.0
+    } else {
+        0.0
+    };
+    let de = if lora_parameters.low_data_rate_optimization {
+        1.0
+    } else {
+        0.0
+    };
     let ih = 0.0_f32; // explicit header
     let cr = lora_parameters.coding_rate as f32; // expected 1..4 representing 4/5..4/8
 
@@ -291,13 +312,17 @@ pub(crate) fn mw_to_dbm(mw: f32) -> f32 {
 #[allow(dead_code)]
 pub(crate) fn get_preamble_time(lora_parameters: &LoraParameters) -> Duration {
     // Calculate the preamble time based on LoRa parameters
-    let symbol_time = 2.0_f32.powi(lora_parameters.spreading_factor as i32) / lora_parameters.bandwidth as f32;
-    Duration::from_micros(((lora_parameters.preamble_symbols + 4.25) * symbol_time * 1000000.0) as u64)
+    let symbol_time =
+        2.0_f32.powi(lora_parameters.spreading_factor as i32) / lora_parameters.bandwidth as f32;
+    Duration::from_micros(
+        ((lora_parameters.preamble_symbols + 4.25) * symbol_time * 1000000.0) as u64,
+    )
 }
 
 pub(crate) fn get_cad_time(lora_parameters: &LoraParameters) -> Duration {
     // Typical length of Lora CAD is the time of 2 symbols
-    let symbol_time = 2.0_f32.powi(lora_parameters.spreading_factor as i32) / lora_parameters.bandwidth as f32;
+    let symbol_time =
+        2.0_f32.powi(lora_parameters.spreading_factor as i32) / lora_parameters.bandwidth as f32;
     Duration::from_micros((2.0 * symbol_time * 1000000.0) as u64)
 }
 
@@ -350,7 +375,14 @@ mod tests {
 
     #[test]
     fn snr_limits_match_expectations() {
-        for (sf, expect) in [(7, -7.5), (8, -10.0), (9, -12.5), (10, -15.0), (11, -17.5), (12, -20.0)] {
+        for (sf, expect) in [
+            (7, -7.5),
+            (8, -10.0),
+            (9, -12.5),
+            (10, -15.0),
+            (11, -17.5),
+            (12, -20.0),
+        ] {
             let lp = params_sf_bw(sf, 125_000);
             let lim = calculate_snr_limit(&lp);
             assert!((lim - expect).abs() < 0.51);

@@ -9,12 +9,18 @@
 use embassy_executor::Spawner;
 use embassy_futures::select::{Either3, select3};
 use moonblokz_radio_lib::{
-    IncomingMessageItem, MAX_NODE_COUNT, MessageType, RADIO_MAX_PACKET_COUNT, RadioCommunicationManager,
-    radio_devices::simulator::{RadioInputQueue, RadioInputQueueSender, RadioOutputQueue, RadioOutputQueueReceiver},
+    IncomingMessageItem, MAX_NODE_COUNT, MessageType, RADIO_MAX_PACKET_COUNT,
+    RadioCommunicationManager,
+    radio_devices::simulator::{
+        RadioInputQueue, RadioInputQueueSender, RadioOutputQueue, RadioOutputQueueReceiver,
+    },
 };
 use std::collections::HashMap;
 
-use super::types::{NodeInputMessage, NodeInputQueueReceiver, NodeOutputMessage, NodeOutputPayload, NodesOutputQueueSender, RadioModuleConfig};
+use super::types::{
+    NodeInputMessage, NodeInputQueueReceiver, NodeOutputMessage, NodeOutputPayload,
+    NodesOutputQueueSender, RadioModuleConfig,
+};
 
 /// Context for managing node state and communication channels.
 struct NodeContext {
@@ -27,17 +33,27 @@ struct NodeContext {
 
 impl NodeContext {
     /// Creates radio queues and initializes the radio device and manager.
-    fn initialize(spawner: Spawner, radio_module_config: RadioModuleConfig, node_id: u32, out_tx: NodesOutputQueueSender) -> (Self, RadioOutputQueueReceiver) {
+    fn initialize(
+        spawner: Spawner,
+        radio_module_config: RadioModuleConfig,
+        node_id: u32,
+        out_tx: NodesOutputQueueSender,
+    ) -> (Self, RadioOutputQueueReceiver) {
         // INTENTIONAL LEAK: Box::leak provides 'static lifetimes for Embassy radio device channels.
         // This allows the embedded moonblokz-radio-lib code to run unmodified in the simulator.
         // These queues live for the entire simulation lifetime and are cleaned up on process exit.
-        let radio_output_queue: &'static mut RadioOutputQueue = Box::leak(Box::new(RadioOutputQueue::new()));
-        let radio_input_queue: &'static mut RadioInputQueue = Box::leak(Box::new(RadioInputQueue::new()));
+        let radio_output_queue: &'static mut RadioOutputQueue =
+            Box::leak(Box::new(RadioOutputQueue::new()));
+        let radio_input_queue: &'static mut RadioInputQueue =
+            Box::leak(Box::new(RadioInputQueue::new()));
 
         let radio_output_queue_receiver = radio_output_queue.receiver();
         let radio_input_queue_sender = radio_input_queue.sender();
 
-        let radio_device = moonblokz_radio_lib::radio_devices::simulator::RadioDevice::with(radio_output_queue.sender(), radio_input_queue.receiver());
+        let radio_device = moonblokz_radio_lib::radio_devices::simulator::RadioDevice::with(
+            radio_output_queue.sender(),
+            radio_input_queue.receiver(),
+        );
 
         let mut manager = RadioCommunicationManager::new();
 
@@ -48,8 +64,11 @@ impl NodeContext {
             echo_messages_target_interval: radio_module_config.echo_messages_target_interval,
             echo_gathering_timeout: radio_module_config.echo_gathering_timeout,
             relay_position_delay: radio_module_config.relay_position_delay,
-            scoring_matrix: moonblokz_radio_lib::ScoringMatrix::new_from_encoded(&radio_module_config.scoring_matrix),
-            retry_interval_for_missing_packets: radio_module_config.retry_interval_for_missing_packets,
+            scoring_matrix: moonblokz_radio_lib::ScoringMatrix::new_from_encoded(
+                &radio_module_config.scoring_matrix,
+            ),
+            retry_interval_for_missing_packets: radio_module_config
+                .retry_interval_for_missing_packets,
             tx_maximum_random_delay: radio_module_config.tx_maximum_random_delay,
         };
 
@@ -104,9 +123,9 @@ impl NodeContext {
             })
             .await;
 
-        let _ = self
-            .manager
-            .report_message_processing_status(moonblokz_radio_lib::MessageProcessingResult::NewBlockAdded(msg.clone()));
+        let _ = self.manager.report_message_processing_status(
+            moonblokz_radio_lib::MessageProcessingResult::NewBlockAdded(msg.clone()),
+        );
 
         true
     }
@@ -132,12 +151,12 @@ impl NodeContext {
 
         let mut response_message = stored_message.clone();
         let _ = response_message.add_packet_list(block_parts);
-        let _ = self
-            .manager
-            .report_message_processing_status(moonblokz_radio_lib::MessageProcessingResult::RequestedBlockPartsFound(
+        let _ = self.manager.report_message_processing_status(
+            moonblokz_radio_lib::MessageProcessingResult::RequestedBlockPartsFound(
                 response_message,
                 msg.sender_node_id(),
-            ));
+            ),
+        );
     }
 
     /// Processes a newly received message from the radio manager.
@@ -167,13 +186,13 @@ impl NodeContext {
     /// Handles a check for duplicate messages.
     fn handle_duplicate_check(&mut self, message_type: u8, sequence: u32, payload_checksum: u32) {
         if self.arrived_messages.contains_key(&sequence) {
-            let _ = self
-                .manager
-                .report_message_processing_status(moonblokz_radio_lib::MessageProcessingResult::AlreadyHaveMessage(
+            let _ = self.manager.report_message_processing_status(
+                moonblokz_radio_lib::MessageProcessingResult::AlreadyHaveMessage(
                     message_type,
                     sequence,
                     payload_checksum,
-                ));
+                ),
+            );
         }
     }
 
@@ -183,7 +202,11 @@ impl NodeContext {
             IncomingMessageItem::NewMessage(msg) => {
                 self.handle_new_message(msg).await;
             }
-            IncomingMessageItem::CheckIfAlreadyHaveMessage(message_type, sequence, payload_checksum) => {
+            IncomingMessageItem::CheckIfAlreadyHaveMessage(
+                message_type,
+                sequence,
+                payload_checksum,
+            ) => {
                 self.handle_duplicate_check(message_type, sequence, payload_checksum);
             }
         }
@@ -225,13 +248,23 @@ impl NodeContext {
                     .send(moonblokz_radio_lib::radio_devices::simulator::RadioInputMessage::CADResponse(success))
                     .await;
             }
+            NodeInputMessage::RequestConnectionMatrix => {
+                let _ = self.manager.report_message_processing_status(
+                    moonblokz_radio_lib::MessageProcessingResult::RequestConnectionMatrixIntoLog,
+                );
+            }
         }
     }
 
     /// Handles outgoing radio events from the device.
-    async fn handle_radio_output(&mut self, output: moonblokz_radio_lib::radio_devices::simulator::RadioOutputMessage) {
+    async fn handle_radio_output(
+        &mut self,
+        output: moonblokz_radio_lib::radio_devices::simulator::RadioOutputMessage,
+    ) {
         match output {
-            moonblokz_radio_lib::radio_devices::simulator::RadioOutputMessage::SendPacket(packet) => {
+            moonblokz_radio_lib::radio_devices::simulator::RadioOutputMessage::SendPacket(
+                packet,
+            ) => {
                 let _ = self
                     .out_tx
                     .send(NodeOutputMessage {
@@ -261,11 +294,24 @@ impl NodeContext {
 /// - Forward outgoing radio events to the network task via `out_tx`.
 /// - Accept incoming control messages (packets to deliver, sends, CAD results).
 #[embassy_executor::task(pool_size = MAX_NODE_COUNT)]
-pub async fn node_task(spawner: Spawner, radio_module_config: RadioModuleConfig, node_id: u32, out_tx: NodesOutputQueueSender, in_rx: NodeInputQueueReceiver) {
-    let (mut context, radio_output_queue_receiver) = NodeContext::initialize(spawner, radio_module_config, node_id, out_tx);
+pub async fn node_task(
+    spawner: Spawner,
+    radio_module_config: RadioModuleConfig,
+    node_id: u32,
+    out_tx: NodesOutputQueueSender,
+    in_rx: NodeInputQueueReceiver,
+) {
+    let (mut context, radio_output_queue_receiver) =
+        NodeContext::initialize(spawner, radio_module_config, node_id, out_tx);
 
     loop {
-        match select3(context.manager.receive_message(), in_rx.receive(), radio_output_queue_receiver.receive()).await {
+        match select3(
+            context.manager.receive_message(),
+            in_rx.receive(),
+            radio_output_queue_receiver.receive(),
+        )
+        .await
+        {
             Either3::First(Ok(item)) => {
                 context.handle_incoming_message_item(item).await;
             }

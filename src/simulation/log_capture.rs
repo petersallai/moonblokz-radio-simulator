@@ -137,7 +137,10 @@ mod tests {
 
     #[test]
     fn test_extract_node_id() {
-        assert_eq!(extract_node_id("[49] RX handler started"), Some((49, "RX handler started")));
+        assert_eq!(
+            extract_node_id("[49] RX handler started"),
+            Some((49, "RX handler started"))
+        );
         assert_eq!(extract_node_id("[1] Test"), Some((1, "Test")));
         assert_eq!(extract_node_id("[123] "), Some((123, "")));
         assert_eq!(extract_node_id("No bracket"), None);

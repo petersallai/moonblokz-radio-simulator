@@ -8,7 +8,7 @@
 //! full radio network simulation with configurable nodes, obstacles, and propagation
 //! parameters. Ideal for protocol testing and topology experiments.
 //!
-//! ## Real-time Tracking Mode  
+//! ## Real-time Tracking Mode
 //! Connect to a live log stream from the log_collector. Visualizes network activity
 //! as it happens on real hardware. Requires both a log file and a scene.json file
 //! defining node positions.
@@ -52,7 +52,7 @@ impl ModeSelector {
         let simulation_icon = Self::load_image(include_bytes!("../../icons/simulation_icon.png"));
         let realtime_icon = Self::load_image(include_bytes!("../../icons/realtime_icon.png"));
         let log_icon = Self::load_image(include_bytes!("../../icons/log_icon.png"));
-        
+
         Self {
             simulation_icon,
             realtime_icon,
@@ -93,17 +93,17 @@ impl ModeSelector {
     /// Returns the selected mode if any button was clicked
     pub fn render(&mut self, ctx: &egui::Context) -> Option<ModeSelection> {
         let mut selection = None;
-    const PANEL_HEIGHT: f32 = 500.0;
-    let button_size = egui::vec2(160.0, 32.0);
-    let button_height = button_size.y;
-    let bottom_padding = 30.0;
-    let min_button_gap = 20.0;
-    let button_spacing = 10.0;
+        const PANEL_HEIGHT: f32 = 500.0;
+        let button_size = egui::vec2(160.0, 32.0);
+        let button_height = button_size.y;
+        let bottom_padding = 30.0;
+        let min_button_gap = 20.0;
+        let button_spacing = 10.0;
 
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.vertical_centered(|ui| {
                 ui.add_space(30.0);
-                
+
                 // Title
                 ui.heading(egui::RichText::new("MoonBlokz Radio Simulator & Analyzer").size(28.0));
                 ui.add_space(10.0);
@@ -260,7 +260,7 @@ impl ModeSelector {
 
         selection
     }
-    
+
     /// Render an icon image or placeholder if loading failed.
     ///
     /// # Parameters
@@ -269,14 +269,14 @@ impl ModeSelector {
     /// * `icon` - Optional icon image to display
     fn render_icon(&self, ui: &mut egui::Ui, icon: &Option<Arc<egui::ColorImage>>) {
         if let Some(color_image) = icon {
-            let texture = ui.ctx().load_texture(
-                "icon",
-                color_image.as_ref().clone(),
-                Default::default(),
+            let texture =
+                ui.ctx()
+                    .load_texture("icon", color_image.as_ref().clone(), Default::default());
+            ui.add(
+                egui::Image::new(&texture)
+                    .max_size(egui::vec2(128.0, 128.0))
+                    .maintain_aspect_ratio(true),
             );
-            ui.add(egui::Image::new(&texture)
-                .max_size(egui::vec2(128.0, 128.0))
-                .maintain_aspect_ratio(true));
         } else {
             // Placeholder if image failed to load
             ui.label(egui::RichText::new("🖼").size(50.0));
@@ -294,11 +294,17 @@ pub enum ModeSelection {
     /// Real-time tracking - log file selection step.
     RealtimeSelectLog,
     /// Real-time tracking - ready to start (both files selected).
-    RealtimeTracking { scene_path: String, log_path: String },
+    RealtimeTracking {
+        scene_path: String,
+        log_path: String,
+    },
     /// Log visualization - scene file selection step.
     LogVisSelectScene,
     /// Log visualization - log file selection step.
     LogVisSelectLog,
     /// Log visualization - ready to start (both files selected).
-    LogVisualization { scene_path: String, log_path: String },
+    LogVisualization {
+        scene_path: String,
+        log_path: String,
+    },
 }

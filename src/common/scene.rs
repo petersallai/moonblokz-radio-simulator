@@ -174,6 +174,12 @@ pub struct Scene {
     /// Optional path to background image.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub background_image: Option<String>,
+    /// Optional link quality threshold for "poor" (real-time tracking).
+    #[serde(default)]
+    pub link_quality_weak_threshold: Option<u8>,
+    /// Optional link quality threshold for "excellent" (real-time tracking).
+    #[serde(default)]
+    pub link_quality_excellent_threshold: Option<u8>,
 }
 
 /// Load and parse a scene from a file.
@@ -237,7 +243,11 @@ pub fn validate_scene(scene: &Scene, mode: SceneMode) -> Result<(), String> {
         return Err("Scene must contain at least one node".to_string());
     }
     if scene.nodes.len() > MAX_NODES {
-        return Err(format!("Node count {} exceeds maximum of {}", scene.nodes.len(), MAX_NODES));
+        return Err(format!(
+            "Node count {} exceeds maximum of {}",
+            scene.nodes.len(),
+            MAX_NODES
+        ));
     }
 
     // Check for duplicate node IDs
@@ -262,7 +272,9 @@ pub fn validate_scene(scene: &Scene, mode: SceneMode) -> Result<(), String> {
         match mode {
             SceneMode::Simulation => {
                 // Check radio strength is realistic
-                if node.radio_strength < MIN_RADIO_STRENGTH || node.radio_strength > MAX_RADIO_STRENGTH {
+                if node.radio_strength < MIN_RADIO_STRENGTH
+                    || node.radio_strength > MAX_RADIO_STRENGTH
+                {
                     return Err(format!(
                         "Node {} radio_strength {} dBm outside realistic range ({} to {} dBm)",
                         node.node_id, node.radio_strength, MIN_RADIO_STRENGTH, MAX_RADIO_STRENGTH
@@ -295,13 +307,19 @@ pub fn validate_scene(scene: &Scene, mode: SceneMode) -> Result<(), String> {
 
         let lora = scene.lora_parameters.as_ref().unwrap();
         if lora.spreading_factor < 5 || lora.spreading_factor > 12 {
-            return Err(format!("Invalid spreading_factor {}, must be 5-12", lora.spreading_factor));
+            return Err(format!(
+                "Invalid spreading_factor {}, must be 5-12",
+                lora.spreading_factor
+            ));
         }
         if lora.bandwidth == 0 {
             return Err("Invalid bandwidth, must be positive".to_string());
         }
         if lora.coding_rate < 1 || lora.coding_rate > 4 {
-            return Err(format!("Invalid coding_rate {}, must be 1-4 (representing 4/5 to 4/8)", lora.coding_rate));
+            return Err(format!(
+                "Invalid coding_rate {}, must be 1-4 (representing 4/5 to 4/8)",
+                lora.coding_rate
+            ));
         }
         if lora.preamble_symbols < 0.0 {
             return Err("Invalid preamble_symbols, must be non-negative".to_string());
@@ -313,6 +331,22 @@ pub fn validate_scene(scene: &Scene, mode: SceneMode) -> Result<(), String> {
         }
         if path_loss.shadowing_sigma < 0.0 {
             return Err("Invalid shadowing_sigma, must be non-negative".to_string());
+        }
+    }
+
+    // Optional link quality thresholds validation
+    if let (Some(weak), Some(excellent)) = (
+        scene.link_quality_weak_threshold,
+        scene.link_quality_excellent_threshold,
+    ) {
+        if weak >= excellent {
+            return Err(format!(
+                "Invalid link quality thresholds: weak {} must be less than excellent {}",
+                weak, excellent
+            ));
+        }
+        if weak > 63 || excellent > 63 {
+            return Err("Link quality thresholds must be within 0-63".to_string());
         }
     }
 
@@ -330,10 +364,16 @@ pub fn validate_scene(scene: &Scene, mode: SceneMode) -> Result<(), String> {
                         idx, MAX_WORLD_COORD
                     ));
                 }
-                if position.top_left.x >= position.bottom_right.x || position.top_left.y >= position.bottom_right.y {
+                if position.top_left.x >= position.bottom_right.x
+                    || position.top_left.y >= position.bottom_right.y
+                {
                     return Err(format!(
                         "Obstacle {} (rectangle) has invalid geometry: top-left ({}, {}) must be strictly less than bottom-right ({}, {})",
-                        idx, position.top_left.x, position.top_left.y, position.bottom_right.x, position.bottom_right.y
+                        idx,
+                        position.top_left.x,
+                        position.top_left.y,
+                        position.bottom_right.x,
+                        position.bottom_right.y
                     ));
                 }
             }
@@ -350,7 +390,10 @@ pub fn validate_scene(scene: &Scene, mode: SceneMode) -> Result<(), String> {
                 let max_extent_x = position.center.x + position.radius;
                 let max_extent_y = position.center.y + position.radius;
                 if max_extent_x > MAX_WORLD_COORD || max_extent_y > MAX_WORLD_COORD {
-                    return Err(format!("Obstacle {} (circle) extends beyond world bounds (0-{})", idx, MAX_WORLD_COORD));
+                    return Err(format!(
+                        "Obstacle {} (circle) extends beyond world bounds (0-{})",
+                        idx, MAX_WORLD_COORD
+                    ));
                 }
             }
         }
@@ -396,8 +439,12 @@ impl From<CirclePos> for crate::simulation::types::CirclePos {
 impl From<Obstacle> for crate::simulation::types::Obstacle {
     fn from(o: Obstacle) -> Self {
         match o {
-            Obstacle::Rectangle { position } => crate::simulation::types::Obstacle::Rectangle { position: position.into() },
-            Obstacle::Circle { position } => crate::simulation::types::Obstacle::Circle { position: position.into() },
+            Obstacle::Rectangle { position } => crate::simulation::types::Obstacle::Rectangle {
+                position: position.into(),
+            },
+            Obstacle::Circle { position } => crate::simulation::types::Obstacle::Circle {
+                position: position.into(),
+            },
         }
     }
 }

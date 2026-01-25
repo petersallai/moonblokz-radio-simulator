@@ -53,21 +53,46 @@ mod ui;
 /// Large enough to handle bursts of node updates without blocking the simulation.
 pub const UI_REFRESH_CHANNEL_SIZE: usize = 500;
 /// Bounded channel for sending UI state updates from the network task to the UI.
-pub type UIRefreshQueue = embassy_sync::channel::Channel<CriticalSectionRawMutex, ui::UIRefreshState, UI_REFRESH_CHANNEL_SIZE>;
+pub type UIRefreshQueue = embassy_sync::channel::Channel<
+    CriticalSectionRawMutex,
+    ui::UIRefreshState,
+    UI_REFRESH_CHANNEL_SIZE,
+>;
 /// Receiver side of the UI refresh channel.
-pub type UIRefreshQueueReceiver = embassy_sync::channel::Receiver<'static, CriticalSectionRawMutex, ui::UIRefreshState, UI_REFRESH_CHANNEL_SIZE>;
+pub type UIRefreshQueueReceiver = embassy_sync::channel::Receiver<
+    'static,
+    CriticalSectionRawMutex,
+    ui::UIRefreshState,
+    UI_REFRESH_CHANNEL_SIZE,
+>;
 /// Sender side of the UI refresh channel.
-pub type UIRefreshQueueSender = embassy_sync::channel::Sender<'static, CriticalSectionRawMutex, ui::UIRefreshState, UI_REFRESH_CHANNEL_SIZE>;
+pub type UIRefreshQueueSender = embassy_sync::channel::Sender<
+    'static,
+    CriticalSectionRawMutex,
+    ui::UIRefreshState,
+    UI_REFRESH_CHANNEL_SIZE,
+>;
 
 /// Capacity of the UI command channel (UI → network).
 /// Smaller than refresh channel as user commands are infrequent.
 pub const UI_COMMAND_CHANNEL_SIZE: usize = 100;
 /// Bounded channel for sending commands from the UI to the network task.
-pub type UICommandQueue = embassy_sync::channel::Channel<CriticalSectionRawMutex, ui::UICommand, UI_COMMAND_CHANNEL_SIZE>;
+pub type UICommandQueue =
+    embassy_sync::channel::Channel<CriticalSectionRawMutex, ui::UICommand, UI_COMMAND_CHANNEL_SIZE>;
 /// Receiver side of the UI command channel.
-pub type UICommandQueueReceiver = embassy_sync::channel::Receiver<'static, CriticalSectionRawMutex, ui::UICommand, UI_COMMAND_CHANNEL_SIZE>;
+pub type UICommandQueueReceiver = embassy_sync::channel::Receiver<
+    'static,
+    CriticalSectionRawMutex,
+    ui::UICommand,
+    UI_COMMAND_CHANNEL_SIZE,
+>;
 /// Sender side of the UI command channel.
-pub type UICommandQueueSender = embassy_sync::channel::Sender<'static, CriticalSectionRawMutex, ui::UICommand, UI_COMMAND_CHANNEL_SIZE>;
+pub type UICommandQueueSender = embassy_sync::channel::Sender<
+    'static,
+    CriticalSectionRawMutex,
+    ui::UICommand,
+    UI_COMMAND_CHANNEL_SIZE,
+>;
 
 /// Initialize the Embassy executor and spawn the mode dispatcher task.
 ///
@@ -80,7 +105,11 @@ pub type UICommandQueueSender = embassy_sync::channel::Sender<'static, CriticalS
 /// * `spawner` - Embassy spawner for creating async tasks
 /// * `ui_refresh_tx` - Channel sender for pushing UI updates
 /// * `ui_command_rx` - Channel receiver for receiving UI commands
-fn embassy_init(spawner: Spawner, ui_refresh_tx: UIRefreshQueueSender, ui_command_rx: UICommandQueueReceiver) {
+fn embassy_init(
+    spawner: Spawner,
+    ui_refresh_tx: UIRefreshQueueSender,
+    ui_command_rx: UICommandQueueReceiver,
+) {
     let _ = spawner.spawn(mode_dispatcher_task(spawner, ui_refresh_tx, ui_command_rx));
 }
 
@@ -91,19 +120,34 @@ fn embassy_init(spawner: Spawner, ui_refresh_tx: UIRefreshQueueSender, ui_comman
 /// - `network_task` for Simulation mode
 /// - `analyzer_task` for RealtimeTracking or LogVisualization modes
 #[embassy_executor::task]
-async fn mode_dispatcher_task(spawner: Spawner, ui_refresh_tx: UIRefreshQueueSender, ui_command_rx: UICommandQueueReceiver) {
+async fn mode_dispatcher_task(
+    spawner: Spawner,
+    ui_refresh_tx: UIRefreshQueueSender,
+    ui_command_rx: UICommandQueueReceiver,
+) {
     log::info!("Mode dispatcher waiting for mode selection...");
 
     loop {
         let cmd = ui_command_rx.receive().await;
         match cmd {
-            ui::UICommand::StartMode { mode, scene_path, log_path } => {
+            ui::UICommand::StartMode {
+                mode,
+                scene_path,
+                log_path,
+            } => {
                 log::info!("Mode selected: {:?}", mode);
                 match mode {
                     ui::OperatingMode::Simulation => {
                         // Simulation mode: spawn network_task with scene path
-                        let _ = ui_refresh_tx.send(ui::UIRefreshState::ModeChanged(mode)).await;
-                        let _ = spawner.spawn(simulation::network_task(spawner, ui_refresh_tx, ui_command_rx, Some(scene_path.clone())));
+                        let _ = ui_refresh_tx
+                            .send(ui::UIRefreshState::ModeChanged(mode))
+                            .await;
+                        let _ = spawner.spawn(simulation::network_task(
+                            spawner,
+                            ui_refresh_tx,
+                            ui_command_rx,
+                            Some(scene_path.clone()),
+                        ));
                         log::info!("Simulation mode started, scene: {}", scene_path);
                         return;
                     }
@@ -111,12 +155,24 @@ async fn mode_dispatcher_task(spawner: Spawner, ui_refresh_tx: UIRefreshQueueSen
                         // Analyzer modes: spawn analyzer_task
                         let log_path = log_path.expect("Log path required for analyzer modes");
                         let analyzer_mode = match mode {
-                            ui::OperatingMode::RealtimeTracking => analyzer::AnalyzerMode::RealtimeTracking,
-                            ui::OperatingMode::LogVisualization => analyzer::AnalyzerMode::LogVisualization,
+                            ui::OperatingMode::RealtimeTracking => {
+                                analyzer::AnalyzerMode::RealtimeTracking
+                            }
+                            ui::OperatingMode::LogVisualization => {
+                                analyzer::AnalyzerMode::LogVisualization
+                            }
                             _ => unreachable!(),
                         };
-                        let _ = ui_refresh_tx.send(ui::UIRefreshState::ModeChanged(mode)).await;
-                        let _ = spawner.spawn(analyzer::analyzer_task(analyzer_mode, scene_path, log_path, ui_refresh_tx, ui_command_rx));
+                        let _ = ui_refresh_tx
+                            .send(ui::UIRefreshState::ModeChanged(mode))
+                            .await;
+                        let _ = spawner.spawn(analyzer::analyzer_task(
+                            analyzer_mode,
+                            scene_path,
+                            log_path,
+                            ui_refresh_tx,
+                            ui_command_rx,
+                        ));
                         log::info!("Analyzer mode started");
                         return;
                     }
@@ -126,9 +182,18 @@ async fn mode_dispatcher_task(spawner: Spawner, ui_refresh_tx: UIRefreshQueueSen
                 // Legacy path: Simulation mode with direct LoadFile
                 // This happens when user selects Simulation and picks a scene file (old behavior)
                 log::info!("Direct LoadFile received (Simulation mode): {}", path);
-                let _ = ui_refresh_tx.send(ui::UIRefreshState::ModeChanged(ui::OperatingMode::Simulation)).await;
+                let _ = ui_refresh_tx
+                    .send(ui::UIRefreshState::ModeChanged(
+                        ui::OperatingMode::Simulation,
+                    ))
+                    .await;
                 // Spawn the network_task with the scene path
-                let _ = spawner.spawn(simulation::network_task(spawner, ui_refresh_tx, ui_command_rx, Some(path)));
+                let _ = spawner.spawn(simulation::network_task(
+                    spawner,
+                    ui_refresh_tx,
+                    ui_command_rx,
+                    Some(path),
+                ));
                 return;
             }
             _ => {
@@ -229,6 +294,12 @@ fn main() {
     let _ = eframe::run_native(
         "MoonBlokz Radio Simulator/Analyzer",
         native_options,
-        Box::new(move |cc| Ok::<_, Box<dyn std::error::Error + Send + Sync>>(Box::new(ui::AppState::new(ui_refresh_rx, ui_command_tx, cc.storage)))),
+        Box::new(move |cc| {
+            Ok::<_, Box<dyn std::error::Error + Send + Sync>>(Box::new(ui::AppState::new(
+                ui_refresh_rx,
+                ui_command_tx,
+                cc.storage,
+            )))
+        }),
     );
 }

@@ -23,7 +23,8 @@ impl ControlConfig {
     /// * `Ok(ControlConfig)` if the file was successfully loaded and parsed
     /// * `Err(String)` with a descriptive error message otherwise
     pub fn load(config_path: &Path) -> Result<Self, String> {
-        let content = std::fs::read_to_string(config_path).map_err(|e| format!("Failed to read config file: {}", e))?;
+        let content = std::fs::read_to_string(config_path)
+            .map_err(|e| format!("Failed to read config file: {}", e))?;
 
         toml::from_str(&content).map_err(|e| format!("Failed to parse config file: {}", e))
     }

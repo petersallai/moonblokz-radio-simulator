@@ -148,7 +148,8 @@ fn map_virtual_to_real(v_target: u64) -> StdInstant {
         Some(dt) => dt,
         None => return clock_lock.origin_real, // already due
     };
-    let real_ticks = ((virt_dt as u128) * (ONE_Q32 as u128) / (clock_lock.scale_q32 as u128)) as u64;
+    let real_ticks =
+        ((virt_dt as u128) * (ONE_Q32 as u128) / (clock_lock.scale_q32 as u128)) as u64;
     let real_ns = (real_ticks as u128) * 1_000_000_000u128 / (tick_hz() as u128);
     // Clamp to avoid potential u128 -> u64 truncation on very long durations
     let real_ns_u64 = real_ns.min(u64::MAX as u128) as u64;
@@ -365,8 +366,16 @@ mod tests {
         set_simulation_speed_percent(400);
         let v_after = map_real_to_virtual(anchor);
         // Allow tiny tolerance in ticks due to integer rounding
-        let diff = if v_after > v_before { v_after - v_before } else { v_before - v_after };
-        assert!(diff <= tick_hz() / 100, "virtual mapping changed too much on speed change: diff={} ticks", diff);
+        let diff = if v_after > v_before {
+            v_after - v_before
+        } else {
+            v_before - v_after
+        };
+        assert!(
+            diff <= tick_hz() / 100,
+            "virtual mapping changed too much on speed change: diff={} ticks",
+            diff
+        );
     }
 
     #[test]
@@ -400,7 +409,11 @@ mod tests {
         let v_target = origin_v.saturating_sub(1);
         let r = map_virtual_to_real(v_target);
         // Within small ns tolerance
-        let d = if r > origin_r { r - origin_r } else { origin_r - r };
+        let d = if r > origin_r {
+            r - origin_r
+        } else {
+            origin_r - r
+        };
         assert!(d < Duration::from_millis(1));
     }
 }

@@ -26,19 +26,42 @@ pub const CAPTURE_THRESHOLD: f32 = 6.0;
 /// Small to avoid unbounded buffering while allowing modest burstiness.
 pub const NODE_INPUT_QUEUE_SIZE: usize = 10;
 /// Bounded channel used to send control messages to a node's manager.
-pub type NodeInputQueue = embassy_sync::channel::Channel<CriticalSectionRawMutex, NodeInputMessage, NODE_INPUT_QUEUE_SIZE>;
+pub type NodeInputQueue = embassy_sync::channel::Channel<
+    CriticalSectionRawMutex,
+    NodeInputMessage,
+    NODE_INPUT_QUEUE_SIZE,
+>;
 /// Receiver side of the node input channel.
-pub type NodeInputQueueReceiver = embassy_sync::channel::Receiver<'static, CriticalSectionRawMutex, NodeInputMessage, NODE_INPUT_QUEUE_SIZE>;
+pub type NodeInputQueueReceiver = embassy_sync::channel::Receiver<
+    'static,
+    CriticalSectionRawMutex,
+    NodeInputMessage,
+    NODE_INPUT_QUEUE_SIZE,
+>;
 /// Sender side of the node input channel.
-pub type NodeInputQueueSender = embassy_sync::channel::Sender<'static, CriticalSectionRawMutex, NodeInputMessage, NODE_INPUT_QUEUE_SIZE>;
+pub type NodeInputQueueSender = embassy_sync::channel::Sender<
+    'static,
+    CriticalSectionRawMutex,
+    NodeInputMessage,
+    NODE_INPUT_QUEUE_SIZE,
+>;
 
 /// Depth of the global output channel (nodes→network task). Also intentionally
 /// small; higher volumes are aggregated and handled by the network loop.
 pub const NODES_OUTPUT_BUFFER_CAPACITY: usize = 10;
 /// Bounded channel used by node tasks to publish events for the network task.
-pub type NodesOutputQueue = embassy_sync::channel::Channel<CriticalSectionRawMutex, NodeOutputMessage, NODES_OUTPUT_BUFFER_CAPACITY>;
+pub type NodesOutputQueue = embassy_sync::channel::Channel<
+    CriticalSectionRawMutex,
+    NodeOutputMessage,
+    NODES_OUTPUT_BUFFER_CAPACITY,
+>;
 /// Sender side of the nodes output channel.
-pub type NodesOutputQueueSender = embassy_sync::channel::Sender<'static, CriticalSectionRawMutex, NodeOutputMessage, NODES_OUTPUT_BUFFER_CAPACITY>;
+pub type NodesOutputQueueSender = embassy_sync::channel::Sender<
+    'static,
+    CriticalSectionRawMutex,
+    NodeOutputMessage,
+    NODES_OUTPUT_BUFFER_CAPACITY,
+>;
 
 /// Root structure representing the entire scene
 #[derive(Deserialize)]
@@ -258,6 +281,8 @@ pub enum NodeInputMessage {
     SendMessage(RadioMessage),
     /// Respond to a CAD request indicating whether any activity was present.
     CADResponse(bool),
+    /// Request the node to dump its connection matrix into logs.
+    RequestConnectionMatrix,
 }
 
 /// Maximum message history per node (ring buffer). Bounded to keep UI/memory predictable.
@@ -359,7 +384,9 @@ impl Node {
             if self.airtime_waiting_packets.len() >= MAX_AIRTIME_WAITING_PACKETS {
                 self.airtime_waiting_packets.remove(0);
             }
-        } else if self.airtime_waiting_packets.len() as f32 >= (MAX_AIRTIME_WAITING_PACKETS as f32 * AIRTIME_CAPACITY_WARNING_THRESHOLD) {
+        } else if self.airtime_waiting_packets.len() as f32
+            >= (MAX_AIRTIME_WAITING_PACKETS as f32 * AIRTIME_CAPACITY_WARNING_THRESHOLD)
+        {
             log::warn!(
                 "Node {} airtime packet queue approaching capacity: {}/{}",
                 self.node_id,

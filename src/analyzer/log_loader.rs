@@ -4,9 +4,9 @@
 //! - Real-time tracking: Tail-follow semantics (starts at end, polls for new lines)
 //! - Log visualization: Sequential reading from start
 
+use embassy_time::{Duration, Timer};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
-use embassy_time::{Duration, Timer};
 
 use super::types::AnalyzerMode;
 

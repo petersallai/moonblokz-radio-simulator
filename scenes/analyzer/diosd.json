@@ -14,5 +14,7 @@
   "world_bottom_right": { "y": 47.3909453611854, "x": 18.96701416893434 },
   "width": 3859,
   "height": 3300,
-  "background_image": "background.png"
+  "background_image": "background.png",
+  "link_quality_weak_threshold": 55,
+  "link_quality_excellent_threshold": 58
 }

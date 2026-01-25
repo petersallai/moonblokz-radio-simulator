@@ -29,6 +29,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 
 use super::{NodeInfo, NodeUIState, OperatingMode, UICommand, UIRefreshState, mode_selector};
+use crate::common::connection_matrix::ConnectionMatrix;
 use crate::control::LogLevel;
 use crate::simulation::Obstacle;
 use crate::simulation::Point;
@@ -37,7 +38,8 @@ use crate::simulation::Point;
 /// The indicator fades from full opacity to transparent over this period.
 pub const NODE_RADIO_TRANSFER_INDICATOR_TIMEOUT: u64 = 1000;
 /// Duration constant as a `std::time::Duration` for easy comparison with timestamps.
-pub const NODE_RADIO_TRANSFER_INDICATOR_DURATION: Duration = Duration::from_millis(NODE_RADIO_TRANSFER_INDICATOR_TIMEOUT);
+pub const NODE_RADIO_TRANSFER_INDICATOR_DURATION: Duration =
+    Duration::from_millis(NODE_RADIO_TRANSFER_INDICATOR_TIMEOUT);
 
 /// Currently selected tab in the right panel inspector.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -46,6 +48,7 @@ pub enum InspectorTab {
     RadioStream,
     MessageStream,
     LogStream,
+    ConnectionMatrix,
 }
 
 /// Type of control modal currently open.
@@ -232,6 +235,12 @@ pub struct AppState {
     /// Link quality value considered "excellent" (from scoring matrix).
     pub excellent_limit: u8,
 
+    // Connection matrix state
+    /// Latest connection matrix per requester node.
+    pub connection_matrices: HashMap<u32, ConnectionMatrix>,
+    /// Nodes with a pending connection matrix request.
+    pub connection_matrix_pending: HashSet<u32>,
+
     // Map display options
     /// Whether to display node IDs as text labels on the map.
     pub show_node_ids: bool,
@@ -293,9 +302,15 @@ impl AppState {
     /// # Returns
     ///
     /// A fully initialized AppState ready for rendering.
-    pub fn new(rx: crate::UIRefreshQueueReceiver, tx: crate::UICommandQueueSender, storage: Option<&dyn eframe::Storage>) -> Self {
+    pub fn new(
+        rx: crate::UIRefreshQueueReceiver,
+        tx: crate::UICommandQueueSender,
+        storage: Option<&dyn eframe::Storage>,
+    ) -> Self {
         // Load persisted settings if available
-        let persisted: PersistedSettings = storage.and_then(|s| eframe::get_value(s, "app_settings")).unwrap_or_default();
+        let persisted: PersistedSettings = storage
+            .and_then(|s| eframe::get_value(s, "app_settings"))
+            .unwrap_or_default();
 
         Self {
             alert: None,
@@ -337,6 +352,8 @@ impl AppState {
             measurement_total_message_count: 0,
             poor_limit: 0,
             excellent_limit: 0,
+            connection_matrices: HashMap::new(),
+            connection_matrix_pending: HashSet::new(),
             show_node_ids: true,
             world_top_left: Point { x: 0.0, y: 0.0 },
             world_bottom_right: Point { x: 100.0, y: 100.0 },
@@ -373,8 +390,13 @@ impl AppState {
                     let rgba = img.to_rgba8();
                     let size = [rgba.width() as usize, rgba.height() as usize];
                     let pixels = rgba.as_flat_samples();
-                    let color_image = egui::ColorImage::from_rgba_unmultiplied(size, pixels.as_slice());
-                    let texture = ctx.load_texture("background_image", color_image, egui::TextureOptions::LINEAR);
+                    let color_image =
+                        egui::ColorImage::from_rgba_unmultiplied(size, pixels.as_slice());
+                    let texture = ctx.load_texture(
+                        "background_image",
+                        color_image,
+                        egui::TextureOptions::LINEAR,
+                    );
                     log::info!("Successfully loaded background image from: {}", path);
                     Some(texture)
                 }
@@ -481,7 +503,10 @@ impl AppState {
     /// Check if real-time tracking mode is ready (both files selected).
     /// If ready, triggers mode start.
     pub fn check_realtime_ready(&mut self) {
-        if let (Some(scene), Some(log)) = (self.mode_selector.realtime_scene_path.clone(), self.mode_selector.realtime_log_path.clone()) {
+        if let (Some(scene), Some(log)) = (
+            self.mode_selector.realtime_scene_path.clone(),
+            self.mode_selector.realtime_log_path.clone(),
+        ) {
             self.mode_selected = true;
             self.scene_file_selected = true;
             self.operating_mode = OperatingMode::RealtimeTracking;
@@ -496,7 +521,10 @@ impl AppState {
     /// Check if log visualization mode is ready (both files selected).
     /// If ready, triggers mode start.
     pub fn check_logvis_ready(&mut self) {
-        if let (Some(scene), Some(log)) = (self.mode_selector.logvis_scene_path.clone(), self.mode_selector.logvis_log_path.clone()) {
+        if let (Some(scene), Some(log)) = (
+            self.mode_selector.logvis_scene_path.clone(),
+            self.mode_selector.logvis_log_path.clone(),
+        ) {
             self.mode_selected = true;
             self.scene_file_selected = true;
             self.operating_mode = OperatingMode::LogVisualization;
@@ -763,12 +791,16 @@ impl AppState {
 
         // Send commands
         for cmd in send_commands {
-            let _ = self.ui_command_tx.try_send(UICommand::SendControlCommand(cmd));
+            let _ = self
+                .ui_command_tx
+                .try_send(UICommand::SendControlCommand(cmd));
         }
     }
 
     /// Validate and build the SetUpdateInterval command from modal state.
-    fn validate_and_build_update_interval_command(&self) -> Result<crate::control::ControlCommand, String> {
+    fn validate_and_build_update_interval_command(
+        &self,
+    ) -> Result<crate::control::ControlCommand, String> {
         // Parse active interval
         let active_period: u32 = self
             .control_modal
@@ -790,9 +822,15 @@ impl AppState {
         }
 
         // Parse start time (user enters local time, convert to UTC)
-        let start_time_naive = chrono::NaiveTime::parse_from_str(&self.control_modal.update_interval_start_time, "%H:%M:%S")
-            .map_err(|_| "Invalid start time format. Use HH:MM:SS".to_string())?;
-        let start_datetime_naive = self.control_modal.update_interval_start_date.and_time(start_time_naive);
+        let start_time_naive = chrono::NaiveTime::parse_from_str(
+            &self.control_modal.update_interval_start_time,
+            "%H:%M:%S",
+        )
+        .map_err(|_| "Invalid start time format. Use HH:MM:SS".to_string())?;
+        let start_datetime_naive = self
+            .control_modal
+            .update_interval_start_date
+            .and_time(start_time_naive);
         let start_time = chrono::Local
             .from_local_datetime(&start_datetime_naive)
             .single()
@@ -800,9 +838,15 @@ impl AppState {
             .with_timezone(&chrono::Utc);
 
         // Parse end time (user enters local time, convert to UTC)
-        let end_time_naive = chrono::NaiveTime::parse_from_str(&self.control_modal.update_interval_end_time, "%H:%M:%S")
-            .map_err(|_| "Invalid end time format. Use HH:MM:SS".to_string())?;
-        let end_datetime_naive = self.control_modal.update_interval_end_date.and_time(end_time_naive);
+        let end_time_naive = chrono::NaiveTime::parse_from_str(
+            &self.control_modal.update_interval_end_time,
+            "%H:%M:%S",
+        )
+        .map_err(|_| "Invalid end time format. Use HH:MM:SS".to_string())?;
+        let end_datetime_naive = self
+            .control_modal
+            .update_interval_end_date
+            .and_time(end_time_naive);
         let end_time = chrono::Local
             .from_local_datetime(&end_datetime_naive)
             .single()
@@ -904,10 +948,10 @@ impl AppState {
 /// - Unknown: White
 pub fn color_for_message_type(message_type: u8, alpha: f32) -> Color32 {
     match message_type {
-        1 => Color32::from_rgba_unmultiplied(0, 255, 0, (alpha * 255.0) as u8),   // Type 1: Green
+        1 => Color32::from_rgba_unmultiplied(0, 255, 0, (alpha * 255.0) as u8), // Type 1: Green
         2 => Color32::from_rgba_unmultiplied(255, 255, 0, (alpha * 255.0) as u8), // Type 2: Yellow
         3 => Color32::from_rgba_unmultiplied(200, 100, 50, (alpha * 255.0) as u8), // Type 3: Red
-        4 => Color32::from_rgba_unmultiplied(0, 0, 255, (alpha * 255.0) as u8),   // Type 4: Blue
+        4 => Color32::from_rgba_unmultiplied(0, 0, 255, (alpha * 255.0) as u8), // Type 4: Blue
         5 => Color32::from_rgba_unmultiplied(255, 0, 255, (alpha * 255.0) as u8), // Type 5: Magenta
         6 => Color32::from_rgba_unmultiplied(255, 165, 0, (alpha * 255.0) as u8), // Type 6: Orange
         7 => Color32::from_rgba_unmultiplied(0, 255, 255, (alpha * 255.0) as u8), // Type 7: Cyan
@@ -954,7 +998,10 @@ impl eframe::App for AppState {
                             self.check_realtime_ready();
                         }
                     }
-                    mode_selector::ModeSelection::RealtimeTracking { scene_path, log_path } => {
+                    mode_selector::ModeSelection::RealtimeTracking {
+                        scene_path,
+                        log_path,
+                    } => {
                         self.mode_selected = true;
                         self.scene_file_selected = true;
                         self.operating_mode = OperatingMode::RealtimeTracking;
@@ -978,7 +1025,10 @@ impl eframe::App for AppState {
                             self.check_logvis_ready();
                         }
                     }
-                    mode_selector::ModeSelection::LogVisualization { scene_path, log_path } => {
+                    mode_selector::ModeSelection::LogVisualization {
+                        scene_path,
+                        log_path,
+                    } => {
                         self.mode_selected = true;
                         self.scene_file_selected = true;
                         self.operating_mode = OperatingMode::LogVisualization;
@@ -1004,13 +1054,16 @@ impl eframe::App for AppState {
         if self.last_node_info_update.elapsed() > Duration::from_secs(1) {
             if let Some(node_info) = &self.node_info {
                 self.last_node_info_update = Instant::now();
-                _ = self.ui_command_tx.try_send(UICommand::RequestNodeInfo(node_info.node_id));
+                _ = self
+                    .ui_command_tx
+                    .try_send(UICommand::RequestNodeInfo(node_info.node_id));
             }
         }
 
         // Clean up expired radio transfer indicators to prevent unbounded HashMap growth
         let now = Instant::now();
-        self.node_radio_transfer_indicators.retain(|_, (expiry_time, _, _)| *expiry_time > now);
+        self.node_radio_transfer_indicators
+            .retain(|_, (expiry_time, _, _)| *expiry_time > now);
 
         while let Ok(msg) = self.ui_refresh_rx.try_receive() {
             match msg {
@@ -1018,7 +1071,9 @@ impl eframe::App for AppState {
                     self.alert = Some(alert_msg);
                 }
                 UIRefreshState::NodeUpdated(node) => {
-                    if let Some(existing) = self.nodes.iter_mut().find(|n| n.node_id == node.node_id) {
+                    if let Some(existing) =
+                        self.nodes.iter_mut().find(|n| n.node_id == node.node_id)
+                    {
                         *existing = node;
                     } else {
                         self.nodes.push(node);
@@ -1026,13 +1081,21 @@ impl eframe::App for AppState {
                 }
                 UIRefreshState::NodesUpdated(nodes) => {
                     self.nodes = nodes;
+                    self.connection_matrices.clear();
+                    self.connection_matrix_pending.clear();
                 }
                 UIRefreshState::ObstaclesUpdated(obstacles) => {
                     self.obstacles = obstacles;
                 }
                 UIRefreshState::NodeSentRadioMessage(node_id, message_type, distance) => {
-                    self.node_radio_transfer_indicators
-                        .insert(node_id, (Instant::now() + NODE_RADIO_TRANSFER_INDICATOR_DURATION, message_type, distance));
+                    self.node_radio_transfer_indicators.insert(
+                        node_id,
+                        (
+                            Instant::now() + NODE_RADIO_TRANSFER_INDICATOR_DURATION,
+                            message_type,
+                            distance,
+                        ),
+                    );
                     if message_type == moonblokz_radio_lib::MessageType::EchoResult as u8 {
                         self.echo_result_count += 1;
                     }
@@ -1040,7 +1103,11 @@ impl eframe::App for AppState {
                 UIRefreshState::NodeInfo(node_info) => {
                     self.node_info = Some(node_info);
                 }
-                UIRefreshState::RadioMessagesCountUpdated(total_sent_packets, total_received_packets, total_collision) => {
+                UIRefreshState::RadioMessagesCountUpdated(
+                    total_sent_packets,
+                    total_received_packets,
+                    total_collision,
+                ) => {
                     self.total_sent_packets = total_sent_packets;
                     self.total_received_packets = total_received_packets;
                     self.total_collision = total_collision;
@@ -1059,7 +1126,8 @@ impl eframe::App for AppState {
                 UIRefreshState::SendMessageInMeasurement(measurement_id) => {
                     if self.measurement_identifier == measurement_id {
                         self.measurement_total_message_count += 1;
-                        self.measurement_total_time = self.measurement_start_time.elapsed().as_secs();
+                        self.measurement_total_time =
+                            self.measurement_start_time.elapsed().as_secs();
                     }
                 }
                 UIRefreshState::PoorAndExcellentLimits(poor, excellent) => {
@@ -1088,9 +1156,14 @@ impl eframe::App for AppState {
                 }
                 UIRefreshState::ModeChanged(mode) => {
                     self.operating_mode = mode;
+                    self.connection_matrices.clear();
+                    self.connection_matrix_pending.clear();
                 }
                 UIRefreshState::TimeUpdated(time) => {
-                    let current_epoch = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+                    let current_epoch = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs();
                     let current_instant = embassy_time::Instant::from_secs(current_epoch);
                     self.last_simulation_time = Some(time);
                     if time < current_instant {
@@ -1101,6 +1174,11 @@ impl eframe::App for AppState {
                 }
                 UIRefreshState::ControlAvailable(available) => {
                     self.control_available = available;
+                }
+                UIRefreshState::ConnectionMatrixUpdated(matrix) => {
+                    let requester = matrix.requester_node_id;
+                    self.connection_matrices.insert(requester, matrix);
+                    self.connection_matrix_pending.remove(&requester);
                 }
             }
         }

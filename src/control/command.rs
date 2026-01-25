@@ -41,13 +41,22 @@ pub enum ControlCommand {
     },
 
     /// Set the log level for a node or all nodes.
-    SetLogLevel { node_id: Option<u32>, log_level: LogLevel },
+    SetLogLevel {
+        node_id: Option<u32>,
+        log_level: LogLevel,
+    },
 
     /// Set the log filter for a node or all nodes.
-    SetLogFilter { node_id: Option<u32>, log_filter: String },
+    SetLogFilter {
+        node_id: Option<u32>,
+        log_filter: String,
+    },
 
     /// Send an arbitrary command to a node or all nodes.
-    RunCommand { node_id: Option<u32>, command: String },
+    RunCommand {
+        node_id: Option<u32>,
+        command: String,
+    },
 
     /// Start a measurement on a specific node.
     StartMeasurement { node_id: u32, sequence: u32 },
@@ -99,7 +108,10 @@ impl ControlCommand {
                 }
             }
 
-            ControlCommand::SetLogFilter { node_id, log_filter } => {
+            ControlCommand::SetLogFilter {
+                node_id,
+                log_filter,
+            } => {
                 let mut params = serde_json::json!({
                     "log_filter": log_filter,
                 });

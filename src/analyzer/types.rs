@@ -62,7 +62,11 @@ pub enum LogEvent {
         length: usize,
     },
     /// *TM8* - Version information.
-    VersionInfo { node_id: u32, probe_version: u8, node_version: u8 },
+    VersionInfo {
+        node_id: u32,
+        probe_version: u8,
+        node_version: u8,
+    },
     /// *TM5* - Packet CRC mismatch (corrupted packet).
     PacketCrcError { node_id: u32, link_quality: u8 },
     /// Position update for a node (for potential future use).
@@ -125,7 +129,10 @@ impl AnalyzerState {
     /// Add a packet record to a node's history.
     pub fn add_packet_record(&mut self, node_id: u32, record: NodePacketRecord) {
         const MAX_HISTORY: usize = 1000;
-        let history = self.node_packet_histories.entry(node_id).or_insert_with(VecDeque::new);
+        let history = self
+            .node_packet_histories
+            .entry(node_id)
+            .or_insert_with(VecDeque::new);
         if history.len() >= MAX_HISTORY {
             history.pop_front();
         }
@@ -135,7 +142,10 @@ impl AnalyzerState {
     /// Add a raw log line to a node's log history.
     pub fn add_log_line(&mut self, node_id: u32, log_line: RawLogLine) {
         const MAX_LOG_HISTORY: usize = 1000;
-        let history = self.node_log_histories.entry(node_id).or_insert_with(VecDeque::new);
+        let history = self
+            .node_log_histories
+            .entry(node_id)
+            .or_insert_with(VecDeque::new);
         if history.len() >= MAX_LOG_HISTORY {
             history.pop_front();
         }
@@ -145,7 +155,10 @@ impl AnalyzerState {
     /// Add a full message (TM6/TM7) to a node's message history.
     pub fn add_full_message(&mut self, node_id: u32, message: FullMessage) {
         const MAX_MESSAGE_HISTORY: usize = 1000;
-        let history = self.node_full_messages.entry(node_id).or_insert_with(VecDeque::new);
+        let history = self
+            .node_full_messages
+            .entry(node_id)
+            .or_insert_with(VecDeque::new);
         if history.len() >= MAX_MESSAGE_HISTORY {
             history.pop_front();
         }
