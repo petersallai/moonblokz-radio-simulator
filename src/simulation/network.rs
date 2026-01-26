@@ -970,7 +970,9 @@ fn distribute_captured_logs(
     ui_refresh_tx: &UIRefreshQueueSender,
 ) {
     for entry in drain_captured_logs() {
-        if let Some(matrix) = connection_matrix_parser.handle_line(entry.node_id, &entry.content) {
+        if let Some(matrix) =
+            connection_matrix_parser.handle_line(entry.node_id, entry.timestamp, &entry.content)
+        {
             ui_refresh_tx
                 .try_send(UIRefreshState::ConnectionMatrixUpdated(matrix))
                 .ok();

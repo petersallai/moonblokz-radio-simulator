@@ -265,9 +265,8 @@ fn parse_tm2(line: &str, node_id: u32) -> Option<LogEvent> {
 
 /// Parse *TM3* - Start measurement.
 fn parse_tm3(line: &str, node_id: u32) -> Option<LogEvent> {
-    log::info!("Parsing TM3 line: {}", line); // --- IGNORE ---
+    log::debug!("Parsing TM3 line: {}", line); // --- IGNORE ---
     let sequence = extract_field_u32(line, "sequence:")?;
-    log::info!("Extracted sequence: {}", sequence); // --- IGNORE ---
     Some(LogEvent::StartMeasurement { node_id, sequence })
 }
 

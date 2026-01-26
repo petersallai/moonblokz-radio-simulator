@@ -196,9 +196,12 @@ pub async fn analyzer_task(
                         // First, try to capture the raw log line for Log Stream tab
                         // This captures ALL log lines with a [node_id] pattern
                         if let Some((node_id, raw_log)) = parse_raw_log_line(&line) {
-                            if let Some(matrix) =
-                                connection_matrix_parser.handle_line(node_id, &raw_log.content)
-                            {
+                            let log_timestamp = convert_to_embassy_instant(raw_log.timestamp);
+                            if let Some(matrix) = connection_matrix_parser.handle_line(
+                                node_id,
+                                log_timestamp,
+                                &raw_log.content,
+                            ) {
                                 let _ = ui_refresh_tx
                                     .send(UIRefreshState::ConnectionMatrixUpdated(matrix))
                                     .await;

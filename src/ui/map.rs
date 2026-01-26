@@ -355,7 +355,9 @@ fn draw_connection_matrix_links(painter: &egui::Painter, rect: egui::Rect, state
                 continue;
             }
             let color = color_for_quality(lq);
-            painter.line_segment([*start, *end], egui::Stroke::new(2.0, color));
+            let is_direct = sender == selected_id || receiver == selected_id;
+            let width = if is_direct { 4.0 } else { 2.0 };
+            painter.line_segment([*start, *end], egui::Stroke::new(width, color));
         }
     }
 
@@ -383,7 +385,9 @@ fn draw_connection_matrix_links(painter: &egui::Painter, rect: egui::Rect, state
                 continue;
             }
             let color = color_for_quality(lq);
-            painter.line_segment([*start, *end], egui::Stroke::new(1.0, color));
+            let is_direct = sender == selected_id || receiver == selected_id;
+            let width = if is_direct { 2.0 } else { 1.0 };
+            painter.line_segment([*start, *end], egui::Stroke::new(width, color));
         }
     }
 }

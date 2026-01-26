@@ -1,5 +1,6 @@
 //! Connection matrix parsing utilities shared between simulation and analyzer.
 
+use embassy_time::Instant;
 use std::collections::HashMap;
 
 /// Decoded connection matrix for a requester node.
@@ -7,6 +8,8 @@ use std::collections::HashMap;
 pub struct ConnectionMatrix {
     pub requester_node_id: u32,
     pub node_count: usize,
+    /// Timestamp from the log line that ended the matrix.
+    pub timestamp: Instant,
     /// Node IDs in row/column order.
     pub node_ids: Vec<u32>,
     /// Link quality values [row][col], 0-63.
@@ -39,6 +42,7 @@ impl ConnectionMatrixParser {
     pub fn handle_line(
         &mut self,
         requester_node_id: u32,
+        timestamp: Instant,
         content: &str,
     ) -> Option<ConnectionMatrix> {
         if !content.contains("*TM9*") {
@@ -99,6 +103,7 @@ impl ConnectionMatrixParser {
             let matrix = ConnectionMatrix {
                 requester_node_id,
                 node_count,
+                timestamp,
                 node_ids: self.row_order.clone(),
                 values,
             };

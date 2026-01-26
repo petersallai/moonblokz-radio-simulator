@@ -325,8 +325,10 @@ pub fn render(ctx: &egui::Context, state: &mut AppState) {
             });
         }
     });
-    // Update stored width when panel is resized
-    state.right_panel_width = response.response.rect.width();
+    // Only persist width changes when the user actively resizes the panel.
+    if response.response.dragged() {
+        state.right_panel_width = response.response.rect.width();
+    }
 }
 
 /// Render the virtualized radio stream table for the selected node.
@@ -761,6 +763,10 @@ fn render_connection_matrix(ui: &mut egui::Ui, state: &mut AppState, node_id: u3
 
     let has_matrix = state.connection_matrices.contains_key(&node_id);
     let is_pending = state.connection_matrix_pending.contains(&node_id);
+    let matrix_timestamp = state
+        .connection_matrices
+        .get(&node_id)
+        .map(|matrix| matrix.timestamp);
 
     if can_query && !has_matrix && !is_pending {
         state.connection_matrix_pending.insert(node_id);
@@ -783,6 +789,11 @@ fn render_connection_matrix(ui: &mut egui::Ui, state: &mut AppState, node_id: u3
         if state.connection_matrix_pending.contains(&node_id) {
             ui.add(egui::Spinner::new());
         }
+
+        if let Some(timestamp) = matrix_timestamp {
+            let time_string = format_inspector_timestamp(state, timestamp);
+            ui.label(format!("Matrix: {}", time_string));
+        }
     });
 
     ui.add_space(8.0);
@@ -790,9 +801,30 @@ fn render_connection_matrix(ui: &mut egui::Ui, state: &mut AppState, node_id: u3
     let matrix = state.connection_matrices.get(&node_id);
 
     if let Some(matrix) = matrix {
-        render_connection_matrix_table(ui, state, matrix);
+        egui::ScrollArea::horizontal()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                render_connection_matrix_table(ui, state, matrix);
+            });
     } else {
         ui.label("No connection matrix available.");
+    }
+}
+
+fn format_inspector_timestamp(state: &AppState, timestamp: embassy_time::Instant) -> String {
+    match state.operating_mode {
+        OperatingMode::Simulation => {
+            let secs = timestamp.duration_since(state.start_time).as_secs();
+            format!("{} s", secs)
+        }
+        OperatingMode::RealtimeTracking | OperatingMode::LogVisualization => {
+            let timestamp_secs = timestamp.as_secs() as i64;
+            let local_time = Local.timestamp_opt(timestamp_secs, 0).single();
+            match local_time {
+                Some(dt) => dt.format("%H:%M:%S").to_string(),
+                None => "--:--:--".to_string(),
+            }
+        }
     }
 }
 
@@ -836,8 +868,8 @@ fn render_connection_matrix_table(
         .vscroll(true)
         .min_scrolled_height(100.0)
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-        .column(Column::auto().resizable(true))
-        .column(Column::auto().resizable(true))
+        .column(Column::exact(110.0))
+        .column(Column::exact(110.0))
         .column(Column::remainder().clip(true))
         .header(20.0, |mut header| {
             header.col(|ui| {
