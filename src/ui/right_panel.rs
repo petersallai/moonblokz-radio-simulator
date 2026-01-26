@@ -362,7 +362,7 @@ fn render_radio_stream_table(ui: &mut egui::Ui, state: &AppState, node_info: &cr
         .column(Column::exact(60.0)) // Timestamp
         .column(Column::exact(55.0)) // From
         .column(Column::remainder().clip(true)) // Type - clips to prevent blocking resize
-        .column(Column::exact(60.0)) // Sequence
+        .column(Column::exact(90.0)) // Sequence
         .column(Column::exact(45.0)) // Packet
         .column(Column::exact(45.0)) // Size
         .column(Column::exact(35.0)) // Link Quality
